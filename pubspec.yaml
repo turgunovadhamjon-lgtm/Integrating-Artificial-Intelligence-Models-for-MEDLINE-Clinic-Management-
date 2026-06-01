@@ -23,7 +23,7 @@ dependencies:
 
   # UI & Icons
   cupertino_icons: ^1.0.8
-  webview_flutter: ^4.9.0
+  webview_flutter: ^4.10.0   # 4.9.0 → 4.10.0 (DmedScreen uchun)
 
   # PDF Hisobot uchun
   pdf: ^3.11.1
@@ -44,6 +44,7 @@ flutter:
 
   assets:
     - assets/icon/logo.png
+
 
 flutter_launcher_icons:
   android: "launcher_icon"

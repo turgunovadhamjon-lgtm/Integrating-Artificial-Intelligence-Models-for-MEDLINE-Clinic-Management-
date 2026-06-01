@@ -1,717 +1,514 @@
 // lib/screens/admin_dashboard.dart
-import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-
+import 'package:provider/provider.dart';
 import '../providers/language_provider.dart';
-import '../providers/theme_provider.dart';
-import '../widgets/theme_toggle.dart';
+import '../theme/medline_theme.dart';
 import 'login_screen.dart';
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
-
-  @override
-  State<AdminDashboard> createState() => _AdminDashboardState();
+  @override State<AdminDashboard> createState() => _AdminDashboardState();
 }
 
-class _AdminDashboardState extends State<AdminDashboard> with TickerProviderStateMixin {
-  String _selectedPeriod = 'today';
-  int _selectedIndex = 0;
-  String? _selectedPatientFilter;
-  
-  late AnimationController _animationController;
-  late Animation<double> _fadeAnimation;
+class _AdminDashboardState extends State<AdminDashboard> with SingleTickerProviderStateMixin {
+  String _period = 'today';
+  int _tabIdx = 0;
+  String? _patFilter;
+  late AnimationController _ac;
+  late Animation<double> _fade;
 
   @override
   void initState() {
     super.initState();
-    _animationController = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1500));
-    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeOutCubic),
-    );
-    _animationController.forward();
+    _ac = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
+    _fade = CurvedAnimation(parent: _ac, curve: Curves.easeOut);
+    _ac.forward();
   }
+  @override void dispose() { _ac.dispose(); super.dispose(); }
 
-  @override
-  void dispose() {
-    _animationController.dispose();
-    super.dispose();
-  }
-  
-  // --- ANIMATIONS & UTILS ---
-  Widget _floatingParticle(int index) {
-    final random = Random(index);
-    final size = random.nextDouble() * 100 + 50;
-    final duration = 20 + random.nextInt(15);
-    return AnimatedPositioned(
-      duration: Duration(seconds: duration),
-      curve: Curves.easeInOutSine,
-      top: -size,
-      left: (random.nextDouble() * 100).clamp(0.0, 95.0) * (MediaQuery.of(context).size.width / 100),
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: RadialGradient(
-            colors: [Colors.white.withOpacity(0.08), Colors.transparent],
-          ),
-          boxShadow: [
-            BoxShadow(color: Colors.white.withOpacity(0.06), blurRadius: 40, spreadRadius: 10),
-          ],
-        ),
-      ),
-    );
-  }
+  String _fmt(dynamic n) => '${NumberFormat('#,###', 'uz_UZ').format((n is num ? n.toDouble() : 0.0))} so\'m';
 
-  String _formatMoney(dynamic amount) {
-    final number = amount is num ? amount.toDouble() : 0.0;
-    return '${NumberFormat('#,###', 'uz_UZ').format(number)} so\'m';
-  }
-
-  String _formatDate(DateTime date) {
-    return '${date.day.toString().padLeft(2, '0')}.${date.month.toString().padLeft(2, '0')}.${date.year}';
-  }
-
-  void _showLanguageDialog() {
-    final lang = Provider.of<LanguageProvider>(context, listen: false);
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        backgroundColor: Colors.transparent,
-        child: Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-             color: const Color(0xFF1E2746).withOpacity(0.95),
-             borderRadius: BorderRadius.circular(24),
-             border: Border.all(color: Colors.white.withOpacity(0.1)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(lang.translate('language'), style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 16),
-              _buildLanguageOption('UZB', 'O\'zbekcha'),
-              _buildLanguageOption('ENG', 'English'),
-              _buildLanguageOption('RUS', 'Русский'),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLanguageOption(String code, String name) {
-    final lang = Provider.of<LanguageProvider>(context, listen: false);
-    final isSelected = lang.currentLanguage == code;
-    return ListTile(
-      title: Text(name, style: TextStyle(color: isSelected ? const Color(0xFF4DB6AC) : Colors.white)),
-      trailing: isSelected ? const Icon(Icons.check, color: Color(0xFF4DB6AC)) : null,
-      onTap: () {
-        lang.changeLanguage(code);
-        Navigator.pop(context);
-      },
-    );
-  }
-  
-  Widget _glassField({required TextEditingController controller, required String label, required IconData icon, bool isPassword = false, TextInputType type = TextInputType.text}) {
-    return TextField(
-      controller: controller,
-      obscureText: isPassword,
-      keyboardType: type,
-      style: const TextStyle(color: Colors.white),
-      decoration: InputDecoration(
-        labelText: label,
-        labelStyle: const TextStyle(color: Colors.white70),
-        prefixIcon: Icon(icon, color: Colors.white70),
-        filled: true,
-        fillColor: Colors.white.withOpacity(0.05),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFF4DB6AC), width: 1.5)),
-      ),
-    );
-  }
-
-  // --- DIALOGS ---
-  void _showAddStaffDialog(LanguageProvider lang) {
-    final nameController = TextEditingController();
-    final emailController = TextEditingController();
-    final passwordController = TextEditingController();
-    String selectedRole = 'doctor';
-    
-    showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => Dialog(
-          backgroundColor: Colors.transparent,
-          child: Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-               color: const Color(0xFF1E2746).withOpacity(0.95),
-               borderRadius: BorderRadius.circular(28),
-               border: Border.all(color: Colors.white.withOpacity(0.1)),
-            ),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(lang.translate('add_staff'), style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 24),
-                  _glassField(controller: nameController, label: lang.translate('name'), icon: Icons.person),
-                  const SizedBox(height: 16),
-                  _glassField(controller: emailController, label: lang.translate('email'), icon: Icons.email, type: TextInputType.emailAddress),
-                  const SizedBox(height: 16),
-                  _glassField(controller: passwordController, label: lang.translate('password'), icon: Icons.lock, isPassword: true),
-                  const SizedBox(height: 16),
-                  
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: selectedRole,
-                        dropdownColor: const Color(0xFF1E2746),
-                        isExpanded: true,
-                        style: const TextStyle(color: Colors.white),
-                        items: ['doctor', 'receptionist', 'laboratory', 'pharmacy'].map((r) => DropdownMenuItem(value: r, child: Text(lang.translate(r == 'pharmacy' ? 'pharmacist' : r)))).toList(),
-                        onChanged: (v) => setDialogState(() => selectedRole = v!),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  Row(children: [
-                     Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(context), style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.white.withOpacity(0.5)), padding: const EdgeInsets.symmetric(vertical: 16)), child: Text(lang.translate('cancel'), style: const TextStyle(color: Colors.white)))),
-                     const SizedBox(width: 12),
-                     Expanded(child: ElevatedButton(
-                       onPressed: () async {
-                          if (nameController.text.isEmpty || emailController.text.isEmpty || passwordController.text.length < 6) return;
-                          try {
-                             UserCredential cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(email: emailController.text.trim(), password: passwordController.text);
-                             await FirebaseFirestore.instance.collection('users').doc(cred.user!.uid).set({
-                               'name': nameController.text.trim(),
-                               'email': emailController.text.trim(),
-                               'role': selectedRole,
-                               'createdAt': FieldValue.serverTimestamp(),
-                               'createdBy': FirebaseAuth.instance.currentUser?.uid,
-                             });
-                             if (mounted) Navigator.pop(context);
-                          } catch (e) {
-                             ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));
-                          }
-                       },
-                       style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4DB6AC), padding: const EdgeInsets.symmetric(vertical: 16)),
-                       child: Text(lang.translate('add'), style: const TextStyle(color: Colors.white)),
-                     )),
-                  ]),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showEditStaffDialog(String id, Map<String, dynamic> data, LanguageProvider lang) {
-      final nameController = TextEditingController(text: data['name']);
-      String selectedRole = data['role'] ?? 'doctor';
-      
-      showDialog(
-        context: context,
-        builder: (context) => StatefulBuilder(
-          builder: (context, setDialogState) => Dialog(
-            backgroundColor: Colors.transparent,
-            child: Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(color: const Color(0xFF1E2746).withOpacity(0.95), borderRadius: BorderRadius.circular(28), border: Border.all(color: Colors.white.withOpacity(0.1))),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                   Text(lang.translate('edit_staff'), style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                   const SizedBox(height: 24),
-                   _glassField(controller: nameController, label: lang.translate('name'), icon: Icons.person),
-                   const SizedBox(height: 16),
-                   Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
-                      child: DropdownButtonHideUnderline(
-                        child: DropdownButton<String>(
-                          value: selectedRole,
-                          dropdownColor: const Color(0xFF1E2746),
-                          isExpanded: true,
-                          style: const TextStyle(color: Colors.white),
-                          items: ['doctor', 'receptionist', 'laboratory', 'pharmacy'].map((r) => DropdownMenuItem(value: r, child: Text(lang.translate(r == 'pharmacy' ? 'pharmacist' : r)))).toList(),
-                          onChanged: (v) => setDialogState(() => selectedRole = v!),
-                        ),
-                      ),
-                   ),
-                   const SizedBox(height: 24),
-                   ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4DB6AC), minimumSize: const Size(double.infinity, 50)),
-                      onPressed: () async {
-                         await FirebaseFirestore.instance.collection('users').doc(id).update({
-                            'name': nameController.text.trim(),
-                            'role': selectedRole,
-                            'updatedAt': FieldValue.serverTimestamp(),
-                         });
-                         if (mounted) Navigator.pop(context);
-                      },
-                      child: Text(lang.translate('save'), style: const TextStyle(color: Colors.white)),
-                   ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-  }
-
-  void _showDoctorDetailDialog(String doctorId, Map<String, dynamic> doctorData, LanguageProvider lang) {
-     showDialog(
-       context: context,
-       builder: (context) => Dialog(
-         backgroundColor: Colors.transparent,
-         child: Container(
-           height: 600,
-           padding: const EdgeInsets.all(24),
-           decoration: BoxDecoration(color: const Color(0xFF1E2746).withOpacity(0.95), borderRadius: BorderRadius.circular(28), border: Border.all(color: Colors.white.withOpacity(0.1))),
-           child: Column(
-             children: [
-               Row(
-                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                 children: [
-                   Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(doctorData['name'] ?? '', style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                      Text(doctorData['email'] ?? '', style: const TextStyle(color: Colors.white60)),
-                   ]),
-                   IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close, color: Colors.white)),
-                 ],
-               ),
-               const SizedBox(height: 24),
-               Expanded(
-                 child: FutureBuilder<Map<String, dynamic>>(
-                   future: _getDetailedDoctorStats(doctorId),
-                   builder: (context, snapshot) {
-                      if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-                      final stats = snapshot.data!;
-                      return SingleChildScrollView(
-                        child: Column(
-                          children: [
-                             Row(children: [
-                                Expanded(child: _miniStat(lang.translate('total_patients'), stats['totalPatients'].toString(), Icons.people, Colors.blueAccent)),
-                                const SizedBox(width: 12),
-                                Expanded(child: _miniStat(lang.translate('total_revenue'), _formatMoney(stats['totalRevenue']), Icons.attach_money, Colors.greenAccent)),
-                             ]),
-                             const SizedBox(height: 12),
-                             Row(children: [
-                                Expanded(child: _miniStat(lang.translate('completed'), stats['completedPatients'].toString(), Icons.check_circle, Colors.tealAccent)),
-                                const SizedBox(width: 12),
-                                Expanded(child: _miniStat(lang.translate('waiting'), stats['waitingPatients'].toString(), Icons.hourglass_empty, Colors.orangeAccent)),
-                             ]),
-                             const SizedBox(height: 20),
-                             const Divider(color: Colors.white24),
-                             const SizedBox(height: 12),
-                             Text(lang.translate('period_statistics'), style: const TextStyle(color: Colors.white, fontSize: 16)),
-                             const SizedBox(height: 12),
-                             _periodRow(lang.translate('today'), stats['todayPatients'], stats['todayRevenue'], Colors.blueAccent),
-                             _periodRow(lang.translate('this_week'), stats['weekPatients'], stats['weekRevenue'], Colors.purpleAccent),
-                             _periodRow(lang.translate('this_month'), stats['monthPatients'], stats['monthRevenue'], Colors.orangeAccent),
-                          ],
-                        ),
-                      );
-                   },
-                 ),
-               ),
-             ],
-           ),
-         ),
-       ),
-     );
-  }
-
-  // --- STATS LOGIC ---
-  Future<Map<String, dynamic>> _getStatistics(String period) async {
-    Query query = FirebaseFirestore.instance.collection('patients');
+  Future<Map<String,dynamic>> _getStats(String period) async {
+    Query q = FirebaseFirestore.instance.collection('patients');
     final now = DateTime.now();
-    DateTime? startDate;
-
-    if (period == 'today') startDate = DateTime(now.year, now.month, now.day);
-    else if (period == 'week') startDate = now.subtract(Duration(days: now.weekday - 1));
-    else if (period == 'month') startDate = DateTime(now.year, now.month, 1);
-
-    if (startDate != null) query = query.where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate));
-
-    final snapshot = await query.get();
-    int totalPatients = snapshot.size;
-    double totalRevenue = 0.0;
-    int paid = 0, unpaid = 0;
-
-    for (var doc in snapshot.docs) {
-       final data = doc.data() as Map<String, dynamic>;
-       final isPaid = data['isPaid'] ?? false;
-       if (isPaid) {
-          totalRevenue += (data['price'] ?? 0.0) as num;
-          paid++;
-       } else {
-          unpaid++;
-       }
-    }
-    return {'totalPatients': totalPatients, 'totalRevenue': totalRevenue, 'paidPatients': paid, 'unpaidPatients': unpaid};
+    DateTime? start;
+    if (period == 'today') start = DateTime(now.year, now.month, now.day);
+    else if (period == 'week') start = now.subtract(Duration(days: now.weekday - 1));
+    else if (period == 'month') start = DateTime(now.year, now.month, 1);
+    if (start != null) q = q.where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(start));
+    final snap = await q.get();
+    double rev = 0; int paid = 0, unpaid = 0;
+    for (var d in snap.docs) { final data = d.data() as Map; if (data['isPaid'] == true) { rev += (data['price'] ?? 0) as num; paid++; } else unpaid++; }
+    return {'total': snap.size, 'rev': rev, 'paid': paid, 'unpaid': unpaid};
   }
 
-  Future<Map<String, dynamic>> _getDetailedDoctorStats(String doctorId) async {
+  Future<Map<String,dynamic>> _getDoctorStats(String docId) async {
     final now = DateTime.now();
-    final todayStart = DateTime(now.year, now.month, now.day);
-    final weekStart = now.subtract(Duration(days: now.weekday - 1));
-    final monthStart = DateTime(now.year, now.month, 1);
-    
-    final snapshot = await FirebaseFirestore.instance.collection('patients').where('doctorId', isEqualTo: doctorId).get();
-    
-    int total = snapshot.size, completed = 0, waiting = 0, paid = 0, unpaid = 0;
-    double revenue = 0.0, todayRev = 0.0, weekRev = 0.0, monthRev = 0.0;
+    final todayS = DateTime(now.year, now.month, now.day);
+    final weekS  = now.subtract(Duration(days: now.weekday - 1));
+    final monthS = DateTime(now.year, now.month, 1);
+    final snap = await FirebaseFirestore.instance.collection('patients').where('doctorId', isEqualTo: docId).get();
+    int total = snap.size, done = 0, wait = 0, paid = 0, unpaid = 0;
+    double rev = 0, todayR = 0, weekR = 0, monthR = 0;
     int todayP = 0, weekP = 0, monthP = 0;
-    
-    for (var doc in snapshot.docs) {
-       final data = doc.data();
-       final status = data['status'];
-       final isPaid = data['isPaid'] ?? false;
-       final price = (data['price'] ?? 0.0) as num;
-       final date = (data['createdAt'] as Timestamp?)?.toDate();
-       
-       if (status == 'completed') completed++; else waiting++;
-       if (isPaid) { paid++; revenue += price.toDouble(); } else unpaid++;
-       
-       if (date != null) {
-          if (date.isAfter(todayStart)) { todayP++; if(isPaid) todayRev += price; }
-          if (date.isAfter(weekStart)) { weekP++; if(isPaid) weekRev += price; }
-          if (date.isAfter(monthStart)) { monthP++; if(isPaid) monthRev += price; }
-       }
+    for (var d in snap.docs) {
+      final data = d.data(); final isPaid = data['isPaid'] ?? false;
+      final price = (data['price'] ?? 0) as num; final date = (data['createdAt'] as Timestamp?)?.toDate();
+      if (data['status'] == 'completed') done++; else wait++;
+      if (isPaid) { paid++; rev += price.toDouble(); } else unpaid++;
+      if (date != null) {
+        if (date.isAfter(todayS)) { todayP++; if(isPaid) todayR += price; }
+        if (date.isAfter(weekS))  { weekP++;  if(isPaid) weekR  += price; }
+        if (date.isAfter(monthS)) { monthP++; if(isPaid) monthR += price; }
+      }
     }
-    return {
-       'totalPatients': total, 'totalRevenue': revenue, 'completedPatients': completed, 'waitingPatients': waiting,
-       'paidPatients': paid, 'unpaidPatients': unpaid, 'todayPatients': todayP, 'todayRevenue': todayRev,
-       'weekPatients': weekP, 'weekRevenue': weekRev, 'monthPatients': monthP, 'monthRevenue': monthRev
-    };
-  }
-
-  // --- WIDGETS ---
-  Widget _buildMainStats(LanguageProvider lang) {
-     return FutureBuilder<Map<String, dynamic>>(
-        future: _getStatistics(_selectedPeriod),
-        builder: (context, snapshot) {
-           if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-           final stats = snapshot.data!;
-           return Column(
-              children: [
-                 Row(children: [
-                    Expanded(child: _statCard(lang.translate('total_patients'), stats['totalPatients'].toString(), Icons.people, Colors.blueAccent)),
-                    const SizedBox(width: 12),
-                    Expanded(child: _statCard(lang.translate('total_revenue'), _formatMoney(stats['totalRevenue']), Icons.attach_money, Colors.greenAccent)),
-                 ]),
-                 const SizedBox(height: 12),
-                 Row(children: [
-                    Expanded(child: _statCard(lang.translate('paid'), stats['paidPatients'].toString(), Icons.check_circle, Colors.tealAccent)),
-                    const SizedBox(width: 12),
-                    Expanded(child: _statCard(lang.translate('unpaid'), stats['unpaidPatients'].toString(), Icons.cancel, Colors.redAccent)),
-                 ]),
-              ],
-           );
-        },
-     );
-  }
-
-  Widget _statCard(String title, String value, IconData icon, Color color) {
-     return Container(
-       padding: const EdgeInsets.all(16),
-       decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.05),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white.withOpacity(0.1)),
-       ),
-       child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-             Icon(icon, color: color, size: 28),
-             const SizedBox(height: 12),
-             Text(value, style: TextStyle(color: color, fontSize: 24, fontWeight: FontWeight.bold)),
-             Text(title, style: const TextStyle(color: Colors.white60, fontSize: 12)),
-          ],
-       ),
-     );
-  }
-  
-  Widget _miniStat(String title, String value, IconData icon, Color color) {
-     return Container(
-       padding: const EdgeInsets.all(12),
-       decoration: BoxDecoration(color: color.withOpacity(0.2), borderRadius: BorderRadius.circular(16)),
-       child: Column(
-          children: [
-             Icon(icon, color: color),
-             Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-             Text(title, style: const TextStyle(color: Colors.white70, fontSize: 10), textAlign: TextAlign.center),
-          ],
-       ),
-     );
-  }
-
-  Widget _periodRow(String period, int count, double rev, Color color) {
-     return Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
-        child: Row(
-           children: [
-              Container(width: 4, height: 30, color: color),
-              const SizedBox(width: 12),
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                 Text(period, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                 Text('$count patients', style: const TextStyle(color: Colors.white54, fontSize: 12)),
-              ]),
-              const Spacer(),
-              Text(_formatMoney(rev), style: TextStyle(color: color, fontWeight: FontWeight.bold)),
-           ],
-        ),
-     );
-  }
-
-  Widget _buildDoctorStats(LanguageProvider lang) {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('users').where('role', isEqualTo: 'doctor').snapshots(),
-      builder: (context, snapshot) {
-         if (!snapshot.hasData) return const SizedBox();
-         final doctors = snapshot.data!.docs;
-         return Column(
-           crossAxisAlignment: CrossAxisAlignment.start,
-           children: [
-              Text(lang.translate('doctor_statistics'), style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 12),
-              ...doctors.map((doc) => _buildDoctorItem(doc, lang)),
-           ],
-         );
-      },
-    );
-  }
-
-  Widget _buildDoctorItem(DocumentSnapshot doc, LanguageProvider lang) {
-     final data = doc.data() as Map<String, dynamic>;
-     return FutureBuilder<Map<String, dynamic>>(
-        future: _getDetailedDoctorStats(doc.id),
-        builder: (context, snapshot) {
-           final stats = snapshot.data ?? {};
-           final revenue = stats['totalRevenue'] ?? 0.0;
-           return GestureDetector(
-             onTap: () => _showDoctorDetailDialog(doc.id, data, lang),
-             child: Container(
-               margin: const EdgeInsets.only(bottom: 12),
-               padding: const EdgeInsets.all(16),
-               decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white.withOpacity(0.1))),
-               child: Row(
-                  children: [
-                     CircleAvatar(backgroundColor: Colors.white.withOpacity(0.1), child: const Icon(Icons.medical_services, color: Colors.white)),
-                     const SizedBox(width: 12),
-                     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(data['name'] ?? '', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                        Text('${stats['totalPatients'] ?? 0} patients', style: const TextStyle(color: Colors.white60, fontSize: 12)),
-                     ])),
-                     Text(_formatMoney(revenue), style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-                  ],
-               ),
-             ),
-           );
-        },
-     );
-  }
-
-  // --- PAGES ---
-  Widget _buildStatisticsPage(LanguageProvider lang) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-             children: ['today', 'week', 'month'].map((p) => Expanded(
-               child: GestureDetector(
-                 onTap: () => setState(() => _selectedPeriod = p),
-                 child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 4),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    decoration: BoxDecoration(color: _selectedPeriod == p ? const Color(0xFF4DB6AC) : Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
-                    child: Center(child: Text(lang.translate(p), style: TextStyle(color: _selectedPeriod == p ? Colors.white : Colors.white60, fontWeight: FontWeight.bold))),
-                 ),
-               ),
-             )).toList(),
-          ),
-          const SizedBox(height: 24),
-          _buildMainStats(lang),
-          const SizedBox(height: 24),
-          _buildDoctorStats(lang),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPatientsPage(LanguageProvider lang) {
-     return StreamBuilder<QuerySnapshot>(
-       stream: _selectedPatientFilter == null 
-           ? FirebaseFirestore.instance.collection('patients').snapshots() 
-           : FirebaseFirestore.instance.collection('patients').where('status', isEqualTo: _selectedPatientFilter).snapshots(),
-       builder: (context, snapshot) {
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-          final patients = snapshot.data!.docs;
-          return Column(
-             children: [
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                     children: [
-                        _filterTab(lang.translate('all'), null),
-                        const SizedBox(width: 8),
-                        _filterTab(lang.translate('waiting'), 'waiting'),
-                        const SizedBox(width: 8),
-                        _filterTab(lang.translate('completed'), 'completed'),
-                     ],
-                  ),
-                ),
-                Expanded(
-                   child: ListView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      itemCount: patients.length,
-                      itemBuilder: (context, index) {
-                         final data = patients[index].data() as Map<String, dynamic>;
-                         return Container(
-                           margin: const EdgeInsets.only(bottom: 12),
-                           decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white.withOpacity(0.1))),
-                           child: ListTile(
-                              leading: CircleAvatar(backgroundColor: (data['status'] == 'completed' ? Colors.green : Colors.orange).withOpacity(0.2), child: Icon(data['status'] == 'completed' ? Icons.check : Icons.hourglass_empty, color: data['status'] == 'completed' ? Colors.green : Colors.orange)),
-                              title: Text(data['name'] ?? '', style: const TextStyle(color: Colors.white)),
-                              subtitle: Text(DateFormat('dd/MM HH:mm').format((data['createdAt'] as Timestamp).toDate()), style: const TextStyle(color: Colors.white54)),
-                              trailing: Text(_formatMoney(data['price']), style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-                           ),
-                         );
-                      },
-                   ),
-                ),
-             ],
-          );
-       },
-     );
-  }
-
-  Widget _filterTab(String label, String? filter) {
-     final isSelected = _selectedPatientFilter == filter;
-     return Expanded(
-        child: GestureDetector(
-           onTap: () => setState(() => _selectedPatientFilter = filter),
-           child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              decoration: BoxDecoration(color: isSelected ? const Color(0xFF4DB6AC) : Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
-              child: Center(child: Text(label, style: TextStyle(color: isSelected ? Colors.white : Colors.white60))),
-           ),
-        ),
-     );
-  }
-  
-  Widget _buildStaffPage(LanguageProvider lang) {
-     return Column(
-       children: [
-         Container(
-           width: double.infinity,
-           margin: const EdgeInsets.all(16),
-           child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4DB6AC), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
-              onPressed: () => _showAddStaffDialog(lang),
-              icon: const Icon(Icons.person_add, color: Colors.white),
-              label: Text(lang.translate('add_staff'), style: const TextStyle(color: Colors.white)),
-           ),
-         ),
-         Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-               stream: FirebaseFirestore.instance.collection('users').where('role', whereIn: ['doctor', 'receptionist', 'laboratory', 'pharmacy']).snapshots(),
-               builder: (context, snapshot) {
-                  if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-                  final staff = snapshot.data!.docs;
-                  return ListView.builder(
-                     padding: const EdgeInsets.symmetric(horizontal: 16),
-                     itemCount: staff.length,
-                     itemBuilder: (context, index) {
-                        final doc = staff[index];
-                        final data = doc.data() as Map<String, dynamic>;
-                        return Container(
-                           margin: const EdgeInsets.only(bottom: 12),
-                           decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white.withOpacity(0.1))),
-                           child: ListTile(
-                              leading: CircleAvatar(backgroundColor: Colors.white.withOpacity(0.1), child: Icon(Icons.person, color: Colors.white)),
-                              title: Text(data['name'] ?? '', style: const TextStyle(color: Colors.white)),
-                              subtitle: Text(lang.translate(data['role']), style: const TextStyle(color: Colors.white54)),
-                              trailing: IconButton(onPressed: () => _showEditStaffDialog(doc.id, data, lang), icon: const Icon(Icons.edit, color: Colors.white70)),
-                           ),
-                        );
-                     },
-                  );
-               },
-            ),
-         ),
-       ],
-     );
+    return {'total': total, 'rev': rev, 'done': done, 'wait': wait, 'paid': paid, 'unpaid': unpaid, 'todayP': todayP, 'todayR': todayR, 'weekP': weekP, 'weekR': weekR, 'monthP': monthP, 'monthR': monthR};
   }
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<LanguageProvider>(
-      builder: (context, lang, child) {
-        return Scaffold(
-          extendBodyBehindAppBar: true,
-          appBar: AppBar(
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            title: const Text('Admin Dashboard', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-            actions: [
-               IconButton(icon: const Icon(Icons.language, color: Colors.white), onPressed: _showLanguageDialog),
-               IconButton(icon: const Icon(Icons.logout, color: Colors.white), onPressed: () => FirebaseAuth.instance.signOut().then((_) => Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen())))),
-            ],
-          ),
-          body: Stack(
-            children: [
-              Container(decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFF0A7075), Color(0xFF083D56), Color(0xFF0A2D4A)]))),
-              ...List.generate(6, (i) => _floatingParticle(i)),
-              SafeArea(
-                 child: _selectedIndex == 0 ? _buildStatisticsPage(lang) :
-                        _selectedIndex == 1 ? _buildPatientsPage(lang) :
-                        _buildStaffPage(lang),
-              ),
-              Positioned(
-                 bottom: 20, left: 20, right: 20,
-                 child: Container(
-                    decoration: BoxDecoration(color: const Color(0xFF1E2746).withOpacity(0.9), borderRadius: BorderRadius.circular(24), boxShadow: [BoxShadow(color: Colors.black45, blurRadius: 20)]),
-                    child: ClipRRect(
-                       borderRadius: BorderRadius.circular(24),
-                       child: BottomNavigationBar(
-                          currentIndex: _selectedIndex,
-                          onTap: (i) => setState(() => _selectedIndex = i),
-                          backgroundColor: Colors.transparent,
-                          selectedItemColor: const Color(0xFF4DB6AC),
-                          unselectedItemColor: Colors.grey,
-                          elevation: 0,
-                          items: [
-                             BottomNavigationBarItem(icon: const Icon(Icons.bar_chart), label: lang.translate('statistics')),
-                             BottomNavigationBarItem(icon: const Icon(Icons.people), label: lang.translate('patients')),
-                             BottomNavigationBarItem(icon: const Icon(Icons.badge), label: lang.translate('staff')),
-                          ],
-                       ),
-                    ),
-                 ),
-              )
-            ],
-          ),
-        );
-      },
+    return Consumer<LanguageProvider>(builder: (_, lang, __) => Scaffold(
+      backgroundColor: ML.bgPage,
+      body: Column(children: [
+        _header(lang),
+        _navBar(lang),
+        Expanded(child: FadeTransition(opacity: _fade, child:
+          _tabIdx == 0 ? _statsPage(lang) : _tabIdx == 1 ? _patientsPage(lang) : _staffPage(lang))),
+      ]),
+    ));
+  }
+
+  // ── HEADER ──
+  Widget _header(LanguageProvider lang) => Container(
+    decoration: const BoxDecoration(
+      gradient: ML.headerGrad,
+      borderRadius: BorderRadius.only(bottomLeft: Radius.circular(28), bottomRight: Radius.circular(28)),
+    ),
+    child: SafeArea(bottom: false, child: Padding(
+      padding: const EdgeInsets.fromLTRB(20, 12, 12, 20),
+      child: Row(children: [
+        Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(16)),
+          child: const Icon(Icons.admin_panel_settings_rounded, color: Colors.white, size: 26)),
+        const SizedBox(width: 14),
+        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('MEDLINE', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 1)),
+          const Text('Admin Panel', style: TextStyle(fontSize: 12, color: Colors.white70)),
+        ]),
+        const Spacer(),
+        _hBtn(Icons.logout_rounded, () async {
+          await FirebaseAuth.instance.signOut();
+          if (mounted) Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
+        }),
+      ]),
+    )),
+  );
+
+  Widget _hBtn(IconData icon, VoidCallback fn) => Material(
+    color: Colors.white.withOpacity(0.15), borderRadius: BorderRadius.circular(12),
+    child: InkWell(borderRadius: BorderRadius.circular(12), onTap: fn,
+      child: Padding(padding: const EdgeInsets.all(10), child: Icon(icon, color: Colors.white, size: 22))),
+  );
+
+  // ── NAV BAR ──
+  Widget _navBar(LanguageProvider lang) => Container(
+    margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+    padding: const EdgeInsets.all(5),
+    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18), boxShadow: ML.cardShadow),
+    child: Row(children: [
+      _navItem(0, Icons.bar_chart_rounded, lang.translate('statistics')),
+      _navItem(1, Icons.people_rounded, lang.translate('patients')),
+      _navItem(2, Icons.badge_rounded, lang.translate('staff')),
+    ]),
+  );
+
+  Widget _navItem(int idx, IconData icon, String label) {
+    final sel = _tabIdx == idx;
+    final grads = [ML.headerGrad, ML.mintGrad, ML.purpleGrad];
+    return Expanded(child: GestureDetector(
+      onTap: () => setState(() => _tabIdx = idx),
+      child: AnimatedContainer(duration: const Duration(milliseconds: 220),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(gradient: sel ? grads[idx] : null, borderRadius: BorderRadius.circular(13)),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 20, color: sel ? Colors.white : Colors.grey.shade400),
+          const SizedBox(height: 4),
+          Text(label, style: TextStyle(fontSize: 11, color: sel ? Colors.white : Colors.grey.shade400, fontWeight: sel ? FontWeight.w700 : FontWeight.normal)),
+        ]),
+      ),
+    ));
+  }
+
+  // ── STATS PAGE ──
+  Widget _statsPage(LanguageProvider lang) => SingleChildScrollView(
+    padding: const EdgeInsets.all(16),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const SizedBox(height: 8),
+      // Period tabs
+      Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), boxShadow: ML.cardShadow),
+        child: Row(children: ['today','week','month'].map((p) {
+          final sel = _period == p;
+          return Expanded(child: GestureDetector(
+            onTap: () => setState(() => _period = p),
+            child: AnimatedContainer(duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.symmetric(vertical: 11),
+              decoration: BoxDecoration(gradient: sel ? ML.headerGrad : null, borderRadius: BorderRadius.circular(11)),
+              child: Center(child: Text(lang.translate(p),
+                style: TextStyle(color: sel ? Colors.white : Colors.grey, fontWeight: sel ? FontWeight.w700 : FontWeight.w500, fontSize: 13))),
+            ),
+          ));
+        }).toList()),
+      ),
+      const SizedBox(height: 16),
+      FutureBuilder<Map<String,dynamic>>(
+        future: _getStats(_period),
+        builder: (_, snap) {
+          if (!snap.hasData) return const Center(child: Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator(color: ML.primary)));
+          final s = snap.data!;
+          return Column(children: [
+            Row(children: [
+              Expanded(child: ML.statCard(lang.translate('total_patients'), '${s['total']}', Icons.people_alt_rounded, ML.headerGrad)),
+              const SizedBox(width: 12),
+              Expanded(child: ML.statCard(lang.translate('total_revenue'), _fmt(s['rev']), Icons.account_balance_wallet_rounded, ML.mintGrad)),
+            ]),
+            const SizedBox(height: 12),
+            Row(children: [
+              Expanded(child: ML.statCard(lang.translate('paid'), '${s['paid']}', Icons.check_circle_rounded,
+                const LinearGradient(colors: [Color(0xFF2EC4B6), Color(0xFF06D6A0)]))),
+              const SizedBox(width: 12),
+              Expanded(child: ML.statCard(lang.translate('unpaid'), '${s['unpaid']}', Icons.cancel_rounded, ML.coralGrad)),
+            ]),
+          ]);
+        },
+      ),
+      const SizedBox(height: 24),
+      ML.sectionHeader(lang.translate('doctor_statistics'), icon: Icons.medical_services_rounded),
+      StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance.collection('users').where('role', isEqualTo: 'doctor').snapshots(),
+        builder: (_, snap) {
+          if (!snap.hasData) return const SizedBox();
+          return Column(children: snap.data!.docs.map((doc) {
+            final d = doc.data() as Map<String,dynamic>;
+            return _doctorCard(doc.id, d, lang);
+          }).toList());
+        },
+      ),
+    ]),
+  );
+
+  Widget _doctorCard(String id, Map<String,dynamic> d, LanguageProvider lang) {
+    final init = (d['name'] as String? ?? 'D')[0].toUpperCase();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(color: ML.bgCard, borderRadius: BorderRadius.circular(20), boxShadow: ML.cardShadow,
+        border: Border.all(color: ML.primary.withOpacity(0.15))),
+      child: Material(color: Colors.transparent, borderRadius: BorderRadius.circular(20),
+        child: InkWell(borderRadius: BorderRadius.circular(20), onTap: () => _doctorDetailDialog(id, d, lang),
+          child: Padding(padding: const EdgeInsets.all(16), child: Row(children: [
+            Container(width: 50, height: 50,
+              decoration: BoxDecoration(gradient: ML.headerGrad, borderRadius: BorderRadius.circular(14),
+                boxShadow: [BoxShadow(color: ML.primary.withOpacity(0.3), blurRadius: 8, offset: const Offset(0,3))]),
+              child: Center(child: Text(init, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)))),
+            const SizedBox(width: 14),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(d['name'] ?? '', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF023E8A))),
+              const SizedBox(height: 4),
+              ML.badge(lang.translate('doctor'), Icons.medical_services_rounded, ML.primary, const Color(0xFFE3F2FD)),
+            ])),
+            Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(gradient: ML.headerGrad, borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.bar_chart_rounded, color: Colors.white, size: 18)),
+          ])),
+        ),
+      ),
     );
   }
+
+  void _doctorDetailDialog(String id, Map<String,dynamic> d, LanguageProvider lang) {
+    showDialog(context: context, builder: (_) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(padding: const EdgeInsets.all(20),
+          decoration: const BoxDecoration(gradient: ML.headerGrad, borderRadius: BorderRadius.only(topLeft: Radius.circular(28), topRight: Radius.circular(28))),
+          child: Row(children: [
+            Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(12)),
+              child: Icon(Icons.medical_services_rounded, color: Colors.white, size: 24)),
+            const SizedBox(width: 12),
+            Text(d['name'] ?? '', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.white)),
+          ])),
+        FutureBuilder<Map<String,dynamic>>(
+          future: _getDoctorStats(id),
+          builder: (_, snap) {
+            if (!snap.hasData) return const Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator(color: ML.primary));
+            final s = snap.data!;
+            return Padding(padding: const EdgeInsets.all(18), child: Column(children: [
+              Row(children: [
+                _miniStat('${s['total']}', lang.translate('total_patients'), Icons.people_rounded, ML.primary),
+                _miniStat('${s['done']}', lang.translate('completed'), Icons.check_circle_rounded, ML.mint),
+                _miniStat('${s['wait']}', lang.translate('waiting'), Icons.hourglass_top_rounded, ML.waiting),
+              ]),
+              const SizedBox(height: 12),
+              Row(children: [
+                _miniStat('${s['paid']}', lang.translate('paid'), Icons.verified_rounded, ML.paid),
+                _miniStat('${s['unpaid']}', lang.translate('unpaid'), Icons.pending_rounded, ML.coral),
+                _miniStat(_fmt(s['rev']), lang.translate('total_revenue'), Icons.account_balance_wallet_rounded, ML.accent),
+              ]),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                style: ElevatedButton.styleFrom(backgroundColor: ML.primary, foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 48), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), elevation: 0),
+                child: const Text('Yopish'),
+              ),
+            ]));
+          },
+        ),
+      ]),
+    ));
+  }
+
+  Widget _miniStat(String val, String lbl, IconData icon, Color c) => Expanded(
+    child: Container(
+      margin: const EdgeInsets.symmetric(horizontal: 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: c.withOpacity(0.08), borderRadius: BorderRadius.circular(14), border: Border.all(color: c.withOpacity(0.2))),
+      child: Column(children: [
+        Icon(icon, color: c, size: 20),
+        const SizedBox(height: 6),
+        Text(val, style: TextStyle(color: c, fontWeight: FontWeight.w800, fontSize: 14)),
+        Text(lbl, style: const TextStyle(color: Colors.black45, fontSize: 9), textAlign: TextAlign.center),
+      ]),
+    ),
+  );
+
+  // ── PATIENTS PAGE ──
+  Widget _patientsPage(LanguageProvider lang) => Column(children: [
+    Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), boxShadow: ML.cardShadow),
+        child: Row(children: [
+          _fChip(null, lang.translate('all')),
+          _fChip('waiting', lang.translate('waiting')),
+          _fChip('completed', lang.translate('completed')),
+        ]),
+      ),
+    ),
+    Expanded(child: StreamBuilder<QuerySnapshot>(
+      stream: _patFilter == null
+          ? FirebaseFirestore.instance.collection('patients').snapshots()
+          : FirebaseFirestore.instance.collection('patients').where('status', isEqualTo: _patFilter).snapshots(),
+      builder: (_, snap) {
+        if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: ML.primary));
+        final docs = snap.data!.docs;
+        if (docs.isEmpty) return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Container(padding: const EdgeInsets.all(24), decoration: const BoxDecoration(gradient: ML.mintGrad, shape: BoxShape.circle),
+            child: const Icon(Icons.people_outline, color: Colors.white, size: 40)),
+          const SizedBox(height: 16),
+          const Text('Bemor topilmadi', style: TextStyle(color: Color(0xFF5E8DB8), fontSize: 15, fontWeight: FontWeight.w600)),
+        ]));
+        return ListView.builder(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+          itemCount: docs.length,
+          itemBuilder: (_, i) {
+            final d = docs[i].data() as Map<String, dynamic>;
+            final done = d['status'] == 'completed';
+            final paid = d['isPaid'] ?? false;
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              decoration: BoxDecoration(color: ML.bgCard, borderRadius: BorderRadius.circular(18), boxShadow: ML.cardShadow,
+                border: Border.all(color: done ? ML.done.withOpacity(0.2) : ML.waiting.withOpacity(0.2))),
+              child: ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                leading: Container(width: 46, height: 46,
+                  decoration: BoxDecoration(gradient: done ? ML.mintGrad : ML.coralGrad, borderRadius: BorderRadius.circular(13)),
+                  child: Icon(done ? Icons.check_rounded : Icons.hourglass_top_rounded, color: Colors.white, size: 22)),
+                title: Text(d['name'] ?? d['fullName'] ?? '', style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF023E8A))),
+                subtitle: d['createdAt'] != null ? Text(
+                  DateFormat('dd.MM.yyyy HH:mm').format((d['createdAt'] as Timestamp).toDate()),
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF5E8DB8))) : null,
+                trailing: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(color: paid ? ML.paidBg : ML.unpaidBg, borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: paid ? ML.paid.withOpacity(0.3) : ML.coral.withOpacity(0.3))),
+                  child: Text('${NumberFormat('#,###').format((d['price'] ?? 0) as num)} so\'m',
+                    style: TextStyle(color: paid ? ML.paid : ML.coral, fontWeight: FontWeight.w700, fontSize: 12))),
+              ),
+            );
+          },
+        );
+      },
+    )),
+  ]);
+
+  Widget _fChip(String? val, String lbl) {
+    final sel = _patFilter == val;
+    final grads = {null: ML.headerGrad, 'waiting': ML.coralGrad, 'completed': ML.mintGrad};
+    return Expanded(child: GestureDetector(
+      onTap: () => setState(() => _patFilter = val),
+      child: AnimatedContainer(duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(gradient: sel ? grads[val] : null, borderRadius: BorderRadius.circular(11)),
+        child: Center(child: Text(lbl, style: TextStyle(fontSize: 12, color: sel ? Colors.white : Colors.grey, fontWeight: sel ? FontWeight.w700 : FontWeight.normal))),
+      ),
+    ));
+  }
+
+  // ── STAFF PAGE ──
+  Widget _staffPage(LanguageProvider lang) => Column(children: [
+    Padding(padding: const EdgeInsets.all(14), child: Container(
+      decoration: BoxDecoration(gradient: ML.purpleGrad, borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: ML.purple.withOpacity(0.35), blurRadius: 14, offset: const Offset(0,5))]),
+      child: Material(color: Colors.transparent, borderRadius: BorderRadius.circular(16),
+        child: InkWell(borderRadius: BorderRadius.circular(16), onTap: () => _addStaffDialog(lang),
+          child: Padding(padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20), child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.person_add_rounded, color: Colors.white, size: 22)),
+            const SizedBox(width: 12),
+            Text(lang.translate('add_staff'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
+          ])))),
+    )),
+    Expanded(child: StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('users').where('role', whereIn: ['doctor','receptionist','laboratory','pharmacy']).snapshots(),
+      builder: (_, snap) {
+        if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: ML.primary));
+        final docs = snap.data!.docs;
+        return ListView.builder(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 24),
+          itemCount: docs.length,
+          itemBuilder: (_, i) {
+            final d = docs[i].data() as Map<String,dynamic>;
+            final role = d['role'] as String? ?? '';
+            final roleData = _roleData(role);
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              decoration: BoxDecoration(color: ML.bgCard, borderRadius: BorderRadius.circular(18), boxShadow: ML.cardShadow,
+                border: Border.all(color: (roleData['color'] as Color).withOpacity(0.2))),
+              child: ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                leading: Container(width: 46, height: 46,
+                  decoration: BoxDecoration(gradient: roleData['grad'] as LinearGradient, borderRadius: BorderRadius.circular(13)),
+                  child: Icon(roleData['icon'] as IconData, color: Colors.white, size: 22)),
+                title: Text(d['name'] ?? '', style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF023E8A))),
+                subtitle: Container(margin: const EdgeInsets.only(top: 4), padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                  decoration: BoxDecoration(color: (roleData['color'] as Color).withOpacity(0.1), borderRadius: BorderRadius.circular(20)),
+                  child: Text(lang.translate(role == 'pharmacy' ? 'pharmacist' : role),
+                    style: TextStyle(fontSize: 11, color: roleData['color'] as Color, fontWeight: FontWeight.w700))),
+                trailing: Material(color: const Color(0xFFE3F2FD), borderRadius: BorderRadius.circular(10),
+                  child: InkWell(borderRadius: BorderRadius.circular(10), onTap: () => _editStaffDialog(docs[i].id, d, lang),
+                    child: Padding(padding: const EdgeInsets.all(8), child: const Icon(Icons.edit_rounded, color: ML.primary, size: 18)))),
+              ),
+            );
+          },
+        );
+      },
+    )),
+  ]);
+
+  Map<String,dynamic> _roleData(String role) {
+    if (role == 'doctor')       return {'color': ML.primary, 'grad': ML.headerGrad, 'icon': Icons.medical_services_rounded};
+    if (role == 'receptionist') return {'color': ML.purple,  'grad': ML.purpleGrad, 'icon': Icons.assignment_ind_rounded};
+    if (role == 'laboratory')   return {'color': ML.accent,  'grad': const LinearGradient(colors: [Color(0xFF00B4D8), Color(0xFF00838F)]), 'icon': Icons.science_rounded};
+    if (role == 'pharmacy')     return {'color': ML.mint,    'grad': ML.mintGrad,   'icon': Icons.local_pharmacy_rounded};
+    return {'color': Colors.grey, 'grad': const LinearGradient(colors: [Colors.grey, Colors.blueGrey]), 'icon': Icons.person};
+  }
+
+  // ── DIALOGS ──
+  void _addStaffDialog(LanguageProvider lang) {
+    final nCtrl = TextEditingController(), eCtrl = TextEditingController(), pCtrl = TextEditingController();
+    String role = 'doctor';
+    showDialog(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setSt) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(padding: const EdgeInsets.all(18),
+          decoration: const BoxDecoration(gradient: ML.purpleGrad, borderRadius: BorderRadius.only(topLeft: Radius.circular(28), topRight: Radius.circular(28))),
+          child: Row(children: [
+            Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(12)),
+              child: const Icon(Icons.person_add_rounded, color: Colors.white, size: 22)),
+            const SizedBox(width: 12),
+            Text(lang.translate('add_staff'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Colors.white)),
+          ])),
+        Padding(padding: const EdgeInsets.all(20), child: Column(children: [
+          _dlgFld(nCtrl, lang.translate('name'), Icons.person_rounded),
+          const SizedBox(height: 12),
+          _dlgFld(eCtrl, lang.translate('email'), Icons.email_rounded, type: TextInputType.emailAddress),
+          const SizedBox(height: 12),
+          _dlgFld(pCtrl, lang.translate('password'), Icons.lock_rounded, obscure: true),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            value: role,
+            decoration: ML.inputDec(lang.translate('role') ?? 'Rol', Icons.badge_rounded),
+            items: ['doctor','receptionist','laboratory','pharmacy'].map((r) => DropdownMenuItem(value: r, child: Text(lang.translate(r == 'pharmacy' ? 'pharmacist' : r)))).toList(),
+            onChanged: (v) => setSt(() => role = v!),
+          ),
+          const SizedBox(height: 20),
+          Row(children: [
+            Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx),
+              style: OutlinedButton.styleFrom(foregroundColor: Colors.grey, side: const BorderSide(color: Color(0xFFDDD)), padding: const EdgeInsets.symmetric(vertical: 13), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+              child: Text(lang.translate('cancel')))),
+            const SizedBox(width: 12),
+            Expanded(child: ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: ML.purple, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 13), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0),
+              onPressed: () async {
+                if (nCtrl.text.isEmpty || eCtrl.text.isEmpty || pCtrl.text.length < 6) return;
+                try {
+                  final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(email: eCtrl.text.trim(), password: pCtrl.text);
+                  await FirebaseFirestore.instance.collection('users').doc(cred.user!.uid).set({'name': nCtrl.text.trim(), 'email': eCtrl.text.trim(), 'role': role, 'createdAt': FieldValue.serverTimestamp(), 'createdBy': FirebaseAuth.instance.currentUser?.uid});
+                  if (mounted) Navigator.pop(ctx);
+                } catch (e) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Xato: $e'), backgroundColor: ML.coral)); }
+              },
+              child: Text(lang.translate('add'), style: const TextStyle(fontWeight: FontWeight.w700)),
+            )),
+          ]),
+        ])),
+      ]),
+    )));
+  }
+
+  void _editStaffDialog(String id, Map<String,dynamic> data, LanguageProvider lang) {
+    final nCtrl = TextEditingController(text: data['name']); String role = data['role'] ?? 'doctor';
+    showDialog(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setSt) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(padding: const EdgeInsets.all(18),
+          decoration: const BoxDecoration(gradient: ML.headerGrad, borderRadius: BorderRadius.only(topLeft: Radius.circular(28), topRight: Radius.circular(28))),
+          child: Row(children: [
+            Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(12)),
+              child: const Icon(Icons.edit_rounded, color: Colors.white, size: 22)),
+            const SizedBox(width: 12),
+            Text(lang.translate('edit_staff'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Colors.white)),
+          ])),
+        Padding(padding: const EdgeInsets.all(20), child: Column(children: [
+          _dlgFld(nCtrl, lang.translate('name'), Icons.person_rounded),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            value: role, decoration: ML.inputDec(lang.translate('role') ?? 'Rol', Icons.badge_rounded),
+            items: ['doctor','receptionist','laboratory','pharmacy'].map((r) => DropdownMenuItem(value: r, child: Text(lang.translate(r == 'pharmacy' ? 'pharmacist' : r)))).toList(),
+            onChanged: (v) => setSt(() => role = v!),
+          ),
+          const SizedBox(height: 20),
+          Row(children: [
+            Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx),
+              style: OutlinedButton.styleFrom(foregroundColor: Colors.grey, side: const BorderSide(color: Color(0xFFDDD)), padding: const EdgeInsets.symmetric(vertical: 13), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+              child: Text(lang.translate('cancel')))),
+            const SizedBox(width: 12),
+            Expanded(child: ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: ML.primary, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 13), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0),
+              onPressed: () async {
+                await FirebaseFirestore.instance.collection('users').doc(id).update({'name': nCtrl.text.trim(), 'role': role, 'updatedAt': FieldValue.serverTimestamp()});
+                if (mounted) Navigator.pop(ctx);
+              },
+              child: Text(lang.translate('save'), style: const TextStyle(fontWeight: FontWeight.w700)),
+            )),
+          ]),
+        ])),
+      ]),
+    )));
+  }
+
+  Widget _dlgFld(TextEditingController c, String lbl, IconData icon, {bool obscure = false, TextInputType type = TextInputType.text}) =>
+    TextField(controller: c, obscureText: obscure, keyboardType: type, style: const TextStyle(fontSize: 15, color: Color(0xFF023E8A)), decoration: ML.inputDec(lbl, icon));
 }

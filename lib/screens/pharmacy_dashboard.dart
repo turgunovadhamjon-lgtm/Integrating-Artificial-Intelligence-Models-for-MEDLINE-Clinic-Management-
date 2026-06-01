@@ -1,6 +1,5 @@
-// lib/screens/pharmacy_dashboard.dart
+// lib/screens/pharmacy_dashboard.dart — YANGI DIZAYN
 import 'dart:io';
-import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -11,743 +10,413 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:path_provider/path_provider.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:printing/printing.dart';
-
 import '../providers/language_provider.dart';
-import '../providers/theme_provider.dart';
-import '../widgets/theme_toggle.dart';
+import '../theme/medline_theme.dart';
 import 'login_screen.dart';
 
 class PharmacyDashboard extends StatefulWidget {
   const PharmacyDashboard({super.key});
-
   @override
   State<PharmacyDashboard> createState() => _PharmacyDashboardState();
 }
 
-class _PharmacyDashboardState extends State<PharmacyDashboard> with TickerProviderStateMixin {
-  int _selectedIndex = 0;
-  final TextEditingController _searchController = TextEditingController(); // FIXED: Controller moved here
-  String _searchQuery = '';
-  String? _selectedCategory;
-  
-  late AnimationController _animationController;
-  late Animation<double> _fadeAnimation;
+class _PharmacyDashboardState extends State<PharmacyDashboard> with SingleTickerProviderStateMixin {
+  int _tab = 0;
+  final _searchCtrl = TextEditingController();
+  String _search = '';
+  String? _catFilter;
+  late AnimationController _animCtrl;
+  late Animation<double> _fadeAnim;
+
+  static const Color primary  = Color(0xFF06D6A0);  // Mint — dorixona
+  static const Color accent   = Color(0xFF00B4D8);
+  static const Color bgPage   = Color(0xFFF0FFF8);
+  static const Color lowStock = Color(0xFFFF6B6B);
 
   @override
   void initState() {
     super.initState();
-    _animationController = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1500));
-    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeOutCubic),
-    );
-    _animationController.forward();
-    
-    _searchController.addListener(() {
-      setState(() {
-        _searchQuery = _searchController.text;
-      });
-    });
+    _animCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
+    _fadeAnim = CurvedAnimation(parent: _animCtrl, curve: Curves.easeOut);
+    _animCtrl.forward();
+    _searchCtrl.addListener(() => setState(() => _search = _searchCtrl.text));
   }
-
   @override
-  void dispose() {
-    _animationController.dispose();
-    _searchController.dispose();
-    super.dispose();
-  }
+  void dispose() { _animCtrl.dispose(); _searchCtrl.dispose(); super.dispose(); }
 
-  // --- ANIMATIONS ---
-  Widget _floatingParticle(int index) {
-    final random = Random(index);
-    final size = random.nextDouble() * 100 + 50;
-    final duration = 20 + random.nextInt(15);
-    return AnimatedPositioned(
-      duration: Duration(seconds: duration),
-      curve: Curves.easeInOutSine,
-      top: -size,
-      left: (random.nextDouble() * 100).clamp(0.0, 95.0) * (MediaQuery.of(context).size.width / 100),
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: RadialGradient(
-            colors: [Colors.white.withOpacity(0.08), Colors.transparent],
-          ),
-          boxShadow: [
-            BoxShadow(color: Colors.white.withOpacity(0.06), blurRadius: 40, spreadRadius: 10),
-          ],
-        ),
-      ),
-    );
-  }
+  String _fmt(dynamic n) => '${NumberFormat('#,###', 'uz_UZ').format((n is num ? n.toDouble() : 0.0))} so\'m';
 
-  // --- PDF REPORT GENERATION ---
-  void _showDatePickerForReport(LanguageProvider lang) async {
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: DateTime.now(),
-      firstDate: DateTime(2020),
-      lastDate: DateTime.now(),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.dark(primary: Color(0xFF4CAF50), surface: Color(0xFF1E2746)),
-            dialogBackgroundColor: const Color(0xFF1E2746),
-          ),
-          child: child!,
-        );
-      },
-    );
+  Color _catColor(String c) => switch(c) { 'tablets' => const Color(0xFF1565C0), 'syrup' => const Color(0xFF6A1B9A), 'injection' => const Color(0xFFC62828), 'ointment' => const Color(0xFFE65100), 'drops' => const Color(0xFF00838F), _ => Colors.grey.shade600 };
+  IconData _catIcon(String c) => switch(c) { 'tablets' => Icons.medication_rounded, 'syrup' => Icons.local_drink_rounded, 'injection' => Icons.vaccines_rounded, 'ointment' => Icons.healing_rounded, 'drops' => Icons.water_drop_rounded, _ => Icons.medical_services_rounded };
 
-    if (picked != null) {
-      _generateDailyReport(picked, lang);
-    }
-  }
-
-  Future<void> _generateDailyReport(DateTime date, LanguageProvider lang) async {
-    final startOfDay = DateTime(date.year, date.month, date.day);
-    final endOfDay = startOfDay.add(const Duration(days: 1));
-
-    final snapshot = await FirebaseFirestore.instance
-        .collection('sales')
-        .where('soldAt', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-        .where('soldAt', isLessThan: Timestamp.fromDate(endOfDay))
-        .orderBy('soldAt', descending: true)
-        .get();
-
-    final sales = snapshot.docs.map((e) => e.data()).toList();
-    final totalAmount = sales.fold<double>(0, (sum, sale) => sum + (sale['totalPrice'] as num).toDouble());
-
+  // ── PDF ──
+  Future<void> _pdfReport(DateTime date, LanguageProvider lang) async {
+    final s = DateTime(date.year, date.month, date.day);
+    final e = s.add(const Duration(days: 1));
+    final snap = await FirebaseFirestore.instance.collection('sales').where('soldAt', isGreaterThanOrEqualTo: Timestamp.fromDate(s)).where('soldAt', isLessThan: Timestamp.fromDate(e)).orderBy('soldAt', descending: true).get();
+    final sales = snap.docs.map((d) => d.data()).toList();
+    final total = sales.fold<double>(0, (s, d) => s + (d['totalPrice'] as num).toDouble());
     final pdf = pw.Document();
-
-    pdf.addPage(
-      pw.Page(
-        pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.all(50),
-        build: (pw.Context context) {
-          return pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              pw.Center(child: pw.Text('MEDLINE - Daily Sales Report', style: pw.TextStyle(fontSize: 28, fontWeight: pw.FontWeight.bold))),
-              pw.SizedBox(height: 12),
-              pw.Center(child: pw.Text(DateFormat('dd MMMM yyyy', 'en_US').format(date), style: const pw.TextStyle(fontSize: 20))),
-              pw.Divider(thickness: 2),
-              pw.SizedBox(height: 25),
-              pw.Text('Total Transactions: ${sales.length}', style: const pw.TextStyle(fontSize: 16)),
-              pw.SizedBox(height: 8),
-              pw.Text('Total Revenue: ${_formatMoney(totalAmount)}', style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold, color: PdfColors.green700)),
-              pw.SizedBox(height: 35),
-              if (sales.isEmpty)
-                pw.Center(child: pw.Text('No sales recorded on this date', style: const pw.TextStyle(fontSize: 18, color: PdfColors.grey600)))
-              else
-                pw.Table(
-                  border: pw.TableBorder.all(width: 1, color: PdfColors.grey500),
-                  columnWidths: {0: const pw.FlexColumnWidth(4), 1: const pw.FlexColumnWidth(1.5), 2: const pw.FlexColumnWidth(2), 3: const pw.FlexColumnWidth(2)},
-                  children: [
-                    pw.TableRow(decoration: const pw.BoxDecoration(color: PdfColors.grey300), children: ['Medicine', 'Qty', 'Unit Price', 'Total'].map((t) => pw.Padding(padding: const pw.EdgeInsets.all(8), child: pw.Text(t, style: pw.TextStyle(fontWeight: pw.FontWeight.bold)))).toList()),
-                    ...sales.map((sale) {
-                      return pw.TableRow(children: [
-                         pw.Padding(padding: const pw.EdgeInsets.all(8), child: pw.Text(sale['medicineName']?.toString() ?? '')),
-                         pw.Padding(padding: const pw.EdgeInsets.all(8), child: pw.Text('${sale['quantity']}')),
-                         pw.Padding(padding: const pw.EdgeInsets.all(8), child: pw.Text(_formatMoney(sale['price']))),
-                         pw.Padding(padding: const pw.EdgeInsets.all(8), child: pw.Text(_formatMoney(sale['totalPrice']))),
-                      ]);
-                    }),
-                  ],
-                ),
-            ],
-          );
-        },
-      ),
-    );
-
+    pdf.addPage(pw.Page(pageFormat: PdfPageFormat.a4, margin: const pw.EdgeInsets.all(50), build: (_) => pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+      pw.Center(child: pw.Text('MEDLINE - Kunlik Savdo Hisoboti', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold))),
+      pw.SizedBox(height: 8),
+      pw.Center(child: pw.Text(DateFormat('dd MMMM yyyy', 'en_US').format(date), style: const pw.TextStyle(fontSize: 18))),
+      pw.Divider(thickness: 2), pw.SizedBox(height: 20),
+      pw.Text('Jami tranzaksiyalar: ${sales.length}', style: const pw.TextStyle(fontSize: 15)),
+      pw.SizedBox(height: 6),
+      pw.Text('Jami daromad: ${_fmt(total)}', style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold, color: PdfColors.green700)),
+      pw.SizedBox(height: 30),
+      if (sales.isNotEmpty) pw.Table(border: pw.TableBorder.all(width: 1, color: PdfColors.grey400), columnWidths: {0: const pw.FlexColumnWidth(4), 1: const pw.FlexColumnWidth(1.5), 2: const pw.FlexColumnWidth(2), 3: const pw.FlexColumnWidth(2)}, children: [
+        pw.TableRow(decoration: const pw.BoxDecoration(color: PdfColors.green100), children: ['Dori', 'Miqdor', 'Narx', 'Jami'].map((t) => pw.Padding(padding: const pw.EdgeInsets.all(8), child: pw.Text(t, style: pw.TextStyle(fontWeight: pw.FontWeight.bold)))).toList()),
+        ...sales.map((s) => pw.TableRow(children: [s['medicineName'] ?? '', '${s['quantity']}', _fmt(s['price']), _fmt(s['totalPrice'])].map((t) => pw.Padding(padding: const pw.EdgeInsets.all(8), child: pw.Text(t))).toList())),
+      ]),
+    ])));
     try {
       final dir = await getTemporaryDirectory();
-      final fileName = 'Daily_Report_${DateFormat('dd-MMM-yyyy').format(date)}.pdf';
-      final file = File('${dir.path}/$fileName');
+      final name = 'Hisobot_${DateFormat('dd-MMM-yyyy').format(date)}.pdf';
+      final file = File('${dir.path}/$name');
       await file.writeAsBytes(await pdf.save());
-
       if (!mounted) return;
-
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: const Color(0xFF1E2746),
-          title: const Text('Report Generated', style: TextStyle(color: Colors.white)),
-          content: Text('$fileName saved', style: const TextStyle(color: Colors.white70)),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                 child: const Text('Close', style: TextStyle(color: Colors.white60))),
-            ElevatedButton.icon(
-              icon: const Icon(Icons.print),
-              label: const Text('Print'),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4CAF50)),
-              onPressed: () { Navigator.pop(ctx); Printing.layoutPdf(onLayout: (_) => pdf.save(), name: fileName); },
-            ),
-             ElevatedButton.icon(
-              icon: const Icon(Icons.folder_open),
-              label: const Text('Open'),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
-              onPressed: () { Navigator.pop(ctx); OpenFilex.open(file.path); },
-            ),
-          ],
-        ),
-      );
+      showDialog(context: context, builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(children: [Icon(Icons.check_circle, color: Color(0xFF2E7D32)), SizedBox(width: 8), Text('Hisobot tayyor')]),
+        content: Text('$name saqlandi'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Yopish')),
+          ElevatedButton.icon(icon: const Icon(Icons.print, size: 18), label: const Text('Chop etish'), style: ElevatedButton.styleFrom(backgroundColor: primary, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), onPressed: () { Navigator.pop(ctx); Printing.layoutPdf(onLayout: (_) => pdf.save(), name: name); }),
+          ElevatedButton.icon(icon: const Icon(Icons.folder_open, size: 18), label: const Text('Ochish'), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1565C0), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), onPressed: () { Navigator.pop(ctx); OpenFilex.open(file.path); }),
+        ],
+      ));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Xato: $e'), backgroundColor: Colors.red));
     }
   }
 
-  // --- WIDGETS ---
-  Widget _glassField({required TextEditingController controller, required String label, required IconData icon, bool isNumber = false}) {
-    return TextField(
-      controller: controller,
-      keyboardType: isNumber ? TextInputType.number : TextInputType.text,
-      style: const TextStyle(color: Colors.white),
-      decoration: InputDecoration(
-        labelText: label,
-        labelStyle: const TextStyle(color: Colors.white70),
-        prefixIcon: Icon(icon, color: Colors.white70),
-        filled: true,
-        fillColor: Colors.black.withOpacity(0.2), // Darker background for better contrast
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFF4DB6AC), width: 1.5)),
-      ),
-    );
-  }
-
-  Widget _buildCategoryChip(String? category, String label, LanguageProvider lang) {
-    final isSelected = _selectedCategory == category;
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: FilterChip(
-        label: Text(label),
-        selected: isSelected,
-        onSelected: (selected) => setState(() => _selectedCategory = selected ? category : null),
-        backgroundColor: Colors.black.withOpacity(0.2), // Dark background for unselected
-        selectedColor: const Color(0xFF4DB6AC), // Solid teal for selected
-        checkmarkColor: Colors.white, // White checkmark
-        labelStyle: TextStyle(
-          color: Colors.white, // Always white text for contrast
-          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+  // ── Dialogs ──
+  void _addMedDialog(LanguageProvider lang) {
+    final nCtrl = TextEditingController(), prCtrl = TextEditingController(), qCtrl = TextEditingController();
+    String cat = 'tablets'; DateTime? expiry;
+    showDialog(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setSt) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: Padding(padding: const EdgeInsets.all(24), child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(12)),
+            child: const Icon(Icons.add_box_rounded, color: Color(0xFF2E7D32), size: 26)),
+          const SizedBox(width: 12),
+          Text(lang.translate('add_medicine'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1B5E20))),
+        ]),
+        const SizedBox(height: 20),
+        _fld(nCtrl, lang.translate('medicine_name'), Icons.medication_rounded),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(
+          value: cat,
+          decoration: _deco(lang.translate('category'), Icons.category_rounded),
+          items: ['tablets','syrup','injection','ointment','drops'].map((c) => DropdownMenuItem(value: c, child: Text(lang.translate(c)))).toList(),
+          onChanged: (v) => setSt(() => cat = v!),
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: BorderSide(color: isSelected ? const Color(0xFF4DB6AC) : Colors.white.withOpacity(0.1))
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(child: _fld(prCtrl, lang.translate('price'), Icons.payments_rounded, type: TextInputType.number)),
+          const SizedBox(width: 12),
+          Expanded(child: _fld(qCtrl, lang.translate('quantity'), Icons.inventory_2_rounded, type: TextInputType.number)),
+        ]),
+        const SizedBox(height: 12),
+        InkWell(
+          onTap: () async {
+            final d = await showDatePicker(context: context, initialDate: DateTime.now().add(const Duration(days: 365)), firstDate: DateTime.now(), lastDate: DateTime.now().add(const Duration(days: 3650)));
+            if (d != null) setSt(() => expiry = d);
+          },
+          child: Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15), decoration: BoxDecoration(color: const Color(0xFFF1FBF3), borderRadius: BorderRadius.circular(14), border: Border.all(color: const Color(0xFFC8E6C9))),
+            child: Row(children: [
+              const Icon(Icons.calendar_month_rounded, color: Color(0xFF2E7D32), size: 20), const SizedBox(width: 12),
+              Text(expiry != null ? DateFormat('dd/MM/yyyy').format(expiry!) : lang.translate('select_date'), style: const TextStyle(fontSize: 15, color: Colors.black87)),
+            ])),
         ),
-      ),
-    );
+        const SizedBox(height: 20),
+        Row(children: [
+          Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx), style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.grey), padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: Text(lang.translate('cancel')))),
+          const SizedBox(width: 12),
+          Expanded(child: ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: primary, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0),
+            onPressed: () async {
+              if (nCtrl.text.isEmpty || prCtrl.text.isEmpty) return;
+              await FirebaseFirestore.instance.collection('medicines').add({'name': nCtrl.text.trim(), 'category': cat, 'price': double.tryParse(prCtrl.text) ?? 0, 'quantity': int.tryParse(qCtrl.text) ?? 0, 'expiryDate': expiry != null ? Timestamp.fromDate(expiry!) : null, 'createdAt': Timestamp.now()});
+              if (mounted) Navigator.pop(ctx);
+            },
+            child: Text(lang.translate('add')),
+          )),
+        ]),
+      ]))),
+    )));
   }
 
-  // --- DIALOGS (Modern) ---
-  void _showAddMedicineDialog(LanguageProvider lang) {
-    final nameController = TextEditingController();
-    final priceController = TextEditingController();
-    final quantityController = TextEditingController();
-    final descriptionController = TextEditingController();
-    String selectedCategory = 'tablets';
-    DateTime? expiryDate;
-    
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setDialogState) => Dialog(
-          backgroundColor: Colors.transparent,
-          child: Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1E2746).withOpacity(0.95), // Dark solid background
-              borderRadius: BorderRadius.circular(28),
-              border: Border.all(color: Colors.white.withOpacity(0.2)),
-            ),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(lang.translate('add_medicine'), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
-                  const SizedBox(height: 24),
-                  _glassField(controller: nameController, label: lang.translate('medicine_name'), icon: Icons.medication),
-                  const SizedBox(height: 16),
-                  
-                  // Dropdown
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    decoration: BoxDecoration(color: Colors.black.withOpacity(0.2), borderRadius: BorderRadius.circular(12)),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: selectedCategory,
-                        dropdownColor: const Color(0xFF1A1F36),
-                        isExpanded: true,
-                        style: const TextStyle(color: Colors.white),
-                        items: ['tablets', 'syrup', 'injection', 'ointment', 'drops'].map((c) => DropdownMenuItem(value: c, child: Text(lang.translate(c)))).toList(),
-                        onChanged: (v) => setDialogState(() => selectedCategory = v!),
-                      ),
-                    ),
-                  ),
-                  
-                  const SizedBox(height: 16),
-                  _glassField(controller: priceController, label: lang.translate('price'), icon: Icons.attach_money, isNumber: true),
-                  const SizedBox(height: 16),
-                  _glassField(controller: quantityController, label: lang.translate('quantity'), icon: Icons.inventory, isNumber: true),
-                  const SizedBox(height: 16),
-                  
-                  // Date Picker
-                  InkWell(
-                    onTap: () async {
-                       final date = await showDatePicker(
-                                            context: context,
-                                            initialDate: DateTime.now().add(const Duration(days: 365)),
-                                            firstDate: DateTime.now(),
-                                            lastDate: DateTime.now().add(const Duration(days: 3650)),
-                                            builder: (context, child) => Theme(data: Theme.of(context).copyWith(colorScheme: const ColorScheme.dark(primary: Color(0xFF4DB6AC), surface: Color(0xFF1E2746)), dialogBackgroundColor: const Color(0xFF1E2746)), child: child!),
-                                          );
-                       if (date != null) setDialogState(() => expiryDate = date);
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-                      decoration: BoxDecoration(color: Colors.black.withOpacity(0.2), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white.withOpacity(0.1))),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.calendar_today, color: Colors.white70),
-                          const SizedBox(width: 12),
-                          Text(expiryDate != null ? DateFormat('dd/MM/yyyy').format(expiryDate!) : lang.translate('select_date'), style: const TextStyle(color: Colors.white)),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 24),
-                  Row(children: [
-                     Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx), style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.white.withOpacity(0.5)), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: Text(lang.translate('cancel'), style: const TextStyle(color: Colors.white)))),
-                     const SizedBox(width: 12),
-                     Expanded(child: ElevatedButton(
-                       onPressed: () async {
-                          if (nameController.text.isEmpty || priceController.text.isEmpty) return;
-                          await FirebaseFirestore.instance.collection('medicines').add({
-                             'name': nameController.text.trim(),
-                             'category': selectedCategory,
-                             'price': double.parse(priceController.text),
-                             'quantity': int.parse(quantityController.text),
-                             'expiryDate': expiryDate != null ? Timestamp.fromDate(expiryDate!) : null,
-                             'description': descriptionController.text.trim(),
-                             'createdAt': Timestamp.now(),
-                          });
-                          if (mounted) Navigator.pop(ctx);
-                       },
-                       style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4DB6AC), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                       child: Text(lang.translate('add'), style: const TextStyle(color: Colors.white)),
-                     )),
-                  ]),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showSellMedicineDialog(String id, Map<String, dynamic> data, LanguageProvider lang) {
-     final qtyController = TextEditingController(text: '1');
-     final price = data['price'] ?? 0.0;
-     final currentQty = data['quantity'] ?? 0;
-     
-     showDialog(
-       context: context,
-       builder: (ctx) => AlertDialog(
-         backgroundColor: const Color(0xFF1E2746),
-         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-         title: Text(lang.translate('sell_medicine'), style: const TextStyle(color: Colors.white)),
-         content: Column(
-           mainAxisSize: MainAxisSize.min,
-           children: [
-             Text(data['name'], style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
-             Text('Available: $currentQty', style: const TextStyle(color: Colors.white60)),
-             const SizedBox(height: 16),
-             TextField(
-               controller: qtyController,
-               keyboardType: TextInputType.number,
-               style: const TextStyle(color: Colors.white),
-               decoration: InputDecoration(
-                 labelText: lang.translate('quantity'),
-                 filled: true,
-                 fillColor: Colors.black.withOpacity(0.2),
-                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-               ),
-             ),
-           ],
-         ),
-         actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: Text(lang.translate('cancel'), style: const TextStyle(color: Colors.white60))),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-              onPressed: () async {
-                 final qty = int.tryParse(qtyController.text) ?? 0;
-                 if (qty > 0 && qty <= currentQty) {
-                    await FirebaseFirestore.instance.collection('sales').add({
-                      'medicineId': id,
-                      'medicineName': data['name'],
-                      'quantity': qty,
-                      'price': price,
-                      'totalPrice': qty * (price as num).toDouble(),
-                      'soldAt': Timestamp.now(),
-                      'soldBy': FirebaseAuth.instance.currentUser?.uid,
-                    });
-                     await FirebaseFirestore.instance.collection('medicines').doc(id).update({
-                       'quantity': currentQty - qty
-                     });
-                    if (mounted) Navigator.pop(ctx);
-                 }
-              },
-              child: Text(lang.translate('sell')),
-            ),
-         ],
-       ),
-     );
-  }
-
-  Color _getCategoryColor(String category) {
-    switch (category) {
-      case 'tablets': return Colors.blueAccent;
-      case 'syrup': return Colors.purpleAccent;
-      case 'injection': return Colors.redAccent;
-      case 'ointment': return Colors.orangeAccent;
-      case 'drops': return Colors.tealAccent;
-      default: return Colors.grey;
-    }
-  }
-
-  IconData _getCategoryIcon(String category) {
-    switch (category) {
-      case 'tablets': return Icons.medication;
-      case 'syrup': return Icons.local_drink;
-      case 'injection': return Icons.vaccines;
-      case 'ointment': return Icons.healing;
-      case 'drops': return Icons.water_drop;
-      default: return Icons.medical_services;
-    }
-  }
-
-  String _formatMoney(dynamic amount) {
-    final number = amount is num ? amount.toDouble() : 0.0;
-    return '${NumberFormat('#,###', 'uz_UZ').format(number)} so\'m';
-  }
-
-  // --- PAGES ---
-  Widget _buildMedicinesPage(LanguageProvider lang) {
-    return Column(
-      children: [
-        Container(
-           margin: const EdgeInsets.all(16),
-           padding: const EdgeInsets.all(16),
-           decoration: BoxDecoration(color: Colors.white.withOpacity(0.08), borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.white.withOpacity(0.1))),
-           child: Column(
-             children: [
-               _glassField(controller: _searchController, label: lang.translate('search_medicine'), icon: Icons.search),
-               const SizedBox(height: 12),
-               SingleChildScrollView(
-                 scrollDirection: Axis.horizontal,
-                 child: Row(
-                   children: [
-                     _buildCategoryChip(null, lang.translate('all'), lang),
-                     _buildCategoryChip('tablets', lang.translate('tablets'), lang),
-                     _buildCategoryChip('syrup', lang.translate('syrup'), lang),
-                     _buildCategoryChip('injection', lang.translate('injection'), lang),
-                     _buildCategoryChip('ointment', lang.translate('ointment'), lang),
-                     _buildCategoryChip('drops', lang.translate('drops'), lang),
-                   ],
-                 ),
-               ),
-             ],
-           ),
-        ),
-        
-        Expanded(
-          child: StreamBuilder<QuerySnapshot>(
-            stream: _selectedCategory == null 
-                ? FirebaseFirestore.instance.collection('medicines').snapshots()
-                : FirebaseFirestore.instance.collection('medicines').where('category', isEqualTo: _selectedCategory).snapshots(),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-              if (!snapshot.hasData) return const SizedBox();
-              
-              final medicines = snapshot.data!.docs.where((doc) {
-                 final data = doc.data() as Map<String, dynamic>;
-                 return (data['name'] as String).toLowerCase().contains(_searchQuery.toLowerCase());
-              }).toList();
-
-              if (medicines.isEmpty) {
-                 return const Center(child: Text('No medicines found', style: TextStyle(color: Colors.white60)));
+  void _sellDialog(String id, Map<String, dynamic> data, LanguageProvider lang) {
+    final qCtrl = TextEditingController(text: '1');
+    final price = data['price'] ?? 0.0;
+    final current = data['quantity'] ?? 0;
+    showDialog(context: context, builder: (ctx) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(14)),
+          child: const Icon(Icons.shopping_cart_checkout_rounded, color: Color(0xFF2E7D32), size: 32)),
+        const SizedBox(height: 12),
+        Text(data['name'], style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1B5E20))),
+        Text('Mavjud: $current dona', style: const TextStyle(color: Colors.black54)),
+        const SizedBox(height: 16),
+        TextField(controller: qCtrl, keyboardType: TextInputType.number, textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          decoration: _deco(lang.translate('quantity'), Icons.numbers_rounded)),
+        const SizedBox(height: 20),
+        Row(children: [
+          Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx), style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.grey), padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: Text(lang.translate('cancel')))),
+          const SizedBox(width: 12),
+          Expanded(child: ElevatedButton.icon(
+            icon: const Icon(Icons.sell_rounded, size: 18),
+            label: Text(lang.translate('sell')),
+            style: ElevatedButton.styleFrom(backgroundColor: primary, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0),
+            onPressed: () async {
+              final qty = int.tryParse(qCtrl.text) ?? 0;
+              if (qty > 0 && qty <= current) {
+                await FirebaseFirestore.instance.collection('sales').add({'medicineId': id, 'medicineName': data['name'], 'quantity': qty, 'price': price, 'totalPrice': qty * (price as num).toDouble(), 'soldAt': Timestamp.now(), 'soldBy': FirebaseAuth.instance.currentUser?.uid});
+                await FirebaseFirestore.instance.collection('medicines').doc(id).update({'quantity': current - qty});
+                if (mounted) Navigator.pop(ctx);
               }
-
-              return ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemCount: medicines.length,
-                itemBuilder: (context, index) {
-                  final data = medicines[index].data() as Map<String, dynamic>;
-                  final isLowStock = int.parse(data['quantity'].toString()) < 10;
-                  
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.2), // Darker card background
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.white.withOpacity(0.1)),
-                    ),
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.all(16),
-                      leading: Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(color: _getCategoryColor(data['category'] ?? '').withOpacity(0.2), borderRadius: BorderRadius.circular(12)),
-                        child: Icon(_getCategoryIcon(data['category'] ?? ''), color: _getCategoryColor(data['category'] ?? '')),
-                      ),
-                      title: Text(data['name'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.white)),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SizedBox(height: 4),
-                          Text('${lang.translate(data['category'] ?? '')}  •  ${data['quantity']} ${lang.translate('pcs')}', style: TextStyle(color: isLowStock ? Colors.orangeAccent : Colors.white70)),
-                          const SizedBox(height: 4),
-                          Text('${_formatMoney(data['price'])}', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-                        ],
-                      ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.shopping_cart, color: Colors.white70),
-                            onPressed: () => _showSellMedicineDialog(medicines[index].id, data, lang),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                            onPressed: () async {
-                              // Confirm delete
-                              showDialog(context: context, builder: (ctx) => AlertDialog(
-                                backgroundColor: const Color(0xFF1E2746),
-                                title: const Text('Delete?', style: TextStyle(color: Colors.white)),
-                                actions: [
-                                  TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-                                  TextButton(onPressed: () {
-                                     FirebaseFirestore.instance.collection('medicines').doc(medicines[index].id).delete();
-                                     Navigator.pop(ctx);
-                                  }, child: const Text('Delete', style: TextStyle(color: Colors.red))),
-                                ],
-                              ));
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              );
             },
-          ),
-        ),
-      ],
-    );
+          )),
+        ]),
+      ])),
+    ));
   }
 
-  Widget _buildSalesPage(LanguageProvider lang) {
-     return StreamBuilder<QuerySnapshot>(
-       stream: FirebaseFirestore.instance.collection('sales').orderBy('soldAt', descending: true).limit(50).snapshots(),
-       builder: (context, snapshot) {
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-          final sales = snapshot.data!.docs;
-          
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: sales.length,
-            itemBuilder: (context, index) {
-               final data = sales[index].data() as Map<String, dynamic>;
-               final soldAt = (data['soldAt'] as Timestamp).toDate();
-               
-               return Container(
-                 margin: const EdgeInsets.only(bottom: 12),
-                 decoration: BoxDecoration(color: Colors.black.withOpacity(0.2), borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white.withOpacity(0.1))),
-                 child: ListTile(
-                   leading: const Icon(Icons.shopping_bag, color: Colors.greenAccent),
-                   title: Text(data['medicineName'] ?? '', style: const TextStyle(color: Colors.white)),
-                   subtitle: Text('${DateFormat('dd/MM HH:mm').format(soldAt)}', style: const TextStyle(color: Colors.white54)),
-                   trailing: Column(
-                     mainAxisAlignment: MainAxisAlignment.center,
-                     crossAxisAlignment: CrossAxisAlignment.end,
-                     children: [
-                       Text('${data['quantity']} x ${_formatMoney(data['price'])}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                       Text(_formatMoney(data['totalPrice']), style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-                     ],
-                   ),
-                 ),
-               );
-            },
+  InputDecoration _deco(String label, IconData icon) => InputDecoration(
+    labelText: label, prefixIcon: Icon(icon, color: primary, size: 20),
+    filled: true, fillColor: const Color(0xFFF1FBF3),
+    border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFFC8E6C9))),
+    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFF2E7D32), width: 1.8)),
+    contentPadding: const EdgeInsets.symmetric(vertical: 15, horizontal: 16),
+  );
+
+  Widget _fld(TextEditingController c, String label, IconData icon, {TextInputType type = TextInputType.text}) =>
+    TextField(controller: c, keyboardType: type, style: const TextStyle(fontSize: 15, color: Colors.black87), decoration: _deco(label, icon));
+
+  // ── Pages ──
+  Widget _medPage(LanguageProvider lang) => Column(children: [
+    Container(color: Colors.white, padding: const EdgeInsets.all(14), child: Column(children: [
+      TextField(controller: _searchCtrl, style: const TextStyle(fontSize: 15),
+        decoration: _deco(lang.translate('search_medicine'), Icons.search_rounded).copyWith(suffixIcon: _search.isNotEmpty ? IconButton(icon: const Icon(Icons.clear, color: Colors.grey), onPressed: () { _searchCtrl.clear(); }) : null)),
+      const SizedBox(height: 10),
+      SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [
+        _chip(null, lang.translate('all'), lang), _chip('tablets', lang.translate('tablets'), lang), _chip('syrup', lang.translate('syrup'), lang),
+        _chip('injection', lang.translate('injection'), lang), _chip('ointment', lang.translate('ointment'), lang), _chip('drops', lang.translate('drops'), lang),
+      ])),
+    ])),
+    Expanded(child: StreamBuilder<QuerySnapshot>(
+      stream: _catFilter == null ? FirebaseFirestore.instance.collection('medicines').snapshots() : FirebaseFirestore.instance.collection('medicines').where('category', isEqualTo: _catFilter).snapshots(),
+      builder: (ctx, snap) {
+        if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: Color(0xFF2E7D32)));
+        final meds = snap.data!.docs.where((d) => (d['name'] as String).toLowerCase().contains(_search.toLowerCase())).toList();
+        if (meds.isEmpty) return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Container(padding: const EdgeInsets.all(24), decoration: BoxDecoration(color: const Color(0xFFE8F5E9), shape: BoxShape.circle), child: const Icon(Icons.medication_rounded, size: 48, color: Color(0xFF2E7D32))),
+          const SizedBox(height: 16), const Text('Dori topilmadi', style: TextStyle(color: Colors.black45, fontSize: 16)),
+        ]));
+        return ListView.builder(
+          padding: const EdgeInsets.all(14),
+          itemCount: meds.length,
+          itemBuilder: (_, i) {
+            final d = meds[i].data() as Map<String, dynamic>;
+            final isLow = (d['quantity'] as num? ?? 0) < 10;
+            final cat = d['category'] as String? ?? '';
+            return Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18),
+                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 3))],
+                border: Border.all(color: isLow ? const Color(0xFFFFCDD2) : const Color(0xFFC8E6C9))),
+              child: Padding(padding: const EdgeInsets.all(14), child: Row(children: [
+                Container(width: 48, height: 48, decoration: BoxDecoration(color: _catColor(cat).withOpacity(0.12), borderRadius: BorderRadius.circular(14)),
+                  child: Icon(_catIcon(cat), color: _catColor(cat), size: 26)),
+                const SizedBox(width: 14),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(d['name'], style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black87)),
+                  const SizedBox(height: 3),
+                  Row(children: [
+                    Text(lang.translate(cat), style: TextStyle(fontSize: 12, color: _catColor(cat), fontWeight: FontWeight.w600)),
+                    const Text('  •  ', style: TextStyle(color: Colors.black26)),
+                    Icon(isLow ? Icons.warning_amber_rounded : Icons.inventory_2_rounded, size: 13, color: isLow ? lowStock : Colors.black45),
+                    const SizedBox(width: 4),
+                    Text('${d['quantity']} dona', style: TextStyle(fontSize: 12, color: isLow ? lowStock : Colors.black45, fontWeight: isLow ? FontWeight.bold : FontWeight.normal)),
+                  ]),
+                  Text(_fmt(d['price']), style: const TextStyle(fontSize: 14, color: Color(0xFF1B5E20), fontWeight: FontWeight.bold)),
+                ])),
+                Column(children: [
+                  IconButton(icon: const Icon(Icons.shopping_cart_rounded, color: Color(0xFF2E7D32)), onPressed: () => _sellDialog(meds[i].id, d, lang), tooltip: lang.translate('sell')),
+                  IconButton(icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 20), onPressed: () => showDialog(context: context, builder: (ctx) => AlertDialog(
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    title: const Text('O\'chirish?'), content: Text(d['name']),
+                    actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Bekor')), ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), onPressed: () { FirebaseFirestore.instance.collection('medicines').doc(meds[i].id).delete(); Navigator.pop(ctx); }, child: const Text('O\'chirish'))],
+                  ))),
+                ]),
+              ])),
+            );
+          },
+        );
+      },
+    )),
+  ]);
+
+  Widget _chip(String? cat, String label, LanguageProvider lang) {
+    final sel = _catFilter == cat;
+    return Padding(padding: const EdgeInsets.only(right: 8), child: FilterChip(
+      label: Text(label, style: TextStyle(color: sel ? Colors.white : Colors.black87, fontWeight: sel ? FontWeight.bold : FontWeight.normal, fontSize: 12)),
+      selected: sel, onSelected: (_) => setState(() => _catFilter = sel ? null : cat),
+      backgroundColor: Colors.grey.shade100, selectedColor: primary,
+      checkmarkColor: Colors.white, showCheckmark: false,
+      side: BorderSide(color: sel ? primary : Colors.grey.shade300),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+    ));
+  }
+
+  Widget _salesPage(LanguageProvider lang) => StreamBuilder<QuerySnapshot>(
+    stream: FirebaseFirestore.instance.collection('sales').orderBy('soldAt', descending: true).limit(50).snapshots(),
+    builder: (ctx, snap) {
+      if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: Color(0xFF2E7D32)));
+      final sales = snap.data!.docs;
+      if (sales.isEmpty) return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Container(padding: const EdgeInsets.all(24), decoration: BoxDecoration(color: const Color(0xFFE8F5E9), shape: BoxShape.circle), child: const Icon(Icons.receipt_long_rounded, size: 48, color: Color(0xFF2E7D32))),
+        const SizedBox(height: 16), const Text('Savdolar yo\'q', style: TextStyle(color: Colors.black45, fontSize: 16)),
+      ]));
+      return ListView.builder(
+        padding: const EdgeInsets.all(14),
+        itemCount: sales.length,
+        itemBuilder: (_, i) {
+          final d = sales[i].data() as Map<String, dynamic>;
+          final dt = (d['soldAt'] as Timestamp).toDate();
+          return Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16),
+              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2))]),
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              leading: Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(12)),
+                child: const Icon(Icons.shopping_bag_rounded, color: Color(0xFF2E7D32), size: 22)),
+              title: Text(d['medicineName'] ?? '', style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.black87)),
+              subtitle: Text(DateFormat('dd/MM/yyyy HH:mm').format(dt), style: const TextStyle(fontSize: 12, color: Colors.black45)),
+              trailing: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [
+                Text('${d['quantity']} x ${_fmt(d['price'])}', style: const TextStyle(fontSize: 11, color: Colors.black45)),
+                Text(_fmt(d['totalPrice']), style: const TextStyle(color: Color(0xFF1B5E20), fontWeight: FontWeight.bold, fontSize: 14)),
+              ]),
+            ),
           );
-       },
-     );
-  }
-  
-  Widget _buildStatisticsPage(LanguageProvider lang) {
-     return FutureBuilder<QuerySnapshot>(
-        future: FirebaseFirestore.instance.collection('sales').get(),
-        builder: (context, snapshot) {
-           if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-           
-           final sales = snapshot.data!.docs;
-           final now = DateTime.now();
-           final todayStart = DateTime(now.year, now.month, now.day);
-           
-           double todaySales = 0;
-           double totalSales = 0;
-           
-           for(var s in sales) {
-             final data = s.data() as Map<String, dynamic>;
-             final price = (data['totalPrice'] ?? 0).toDouble();
-             totalSales += price;
-             if ((data['soldAt'] as Timestamp).toDate().isAfter(todayStart)) {
-                todaySales += price;
-             }
-           }
-           
-           return Padding(
-             padding: const EdgeInsets.all(16),
-             child: Column(
-               children: [
-                  _statCard('Today\'s Revenue', _formatMoney(todaySales), Icons.today, Colors.blueAccent),
-                  const SizedBox(height: 16),
-                  _statCard('Total Revenue', _formatMoney(totalSales), Icons.attach_money, Colors.greenAccent),
-               ],
-             ),
-           );
         },
-     );
-  }
+      );
+    },
+  );
 
-  Widget _statCard(String title, String value, IconData icon, Color color) {
-     return Container(
-       padding: const EdgeInsets.all(24),
-       decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.05),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: Colors.white.withOpacity(0.1)),
-       ),
-       child: Row(
-         children: [
-            Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: color.withOpacity(0.2), borderRadius: BorderRadius.circular(16)), child: Icon(icon, color: color, size: 32)),
-            const SizedBox(width: 20),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: const TextStyle(color: Colors.white60, fontSize: 16)),
-                Text(value, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-              ],
-            )
-         ],
-       ),
-     );
-  }
+  Widget _statsPage(LanguageProvider lang) => FutureBuilder<QuerySnapshot>(
+    future: FirebaseFirestore.instance.collection('sales').get(),
+    builder: (ctx, snap) {
+      if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: Color(0xFF2E7D32)));
+      final sales = snap.data!.docs;
+      final now = DateTime.now();
+      final todayStart = DateTime(now.year, now.month, now.day);
+      double today = 0, total = 0;
+      for (var s in sales) { final d = s.data() as Map<String, dynamic>; final p = (d['totalPrice'] ?? 0).toDouble(); total += p; if ((d['soldAt'] as Timestamp).toDate().isAfter(todayStart)) today += p; }
+      return Padding(padding: const EdgeInsets.all(18), child: Column(children: [
+        _statCard(lang.translate('today_revenue') ?? 'Bugungi daromad', _fmt(today), Icons.today_rounded, const Color(0xFF1565C0), const Color(0xFFE3F2FD)),
+        const SizedBox(height: 14),
+        _statCard(lang.translate('total_revenue') ?? 'Jami daromad', _fmt(total), Icons.account_balance_wallet_rounded, primary, const Color(0xFFE8F5E9)),
+        const SizedBox(height: 14),
+        _statCard('Jami tranzaksiyalar', '${sales.length} ta', Icons.receipt_rounded, const Color(0xFF6A1B9A), const Color(0xFFF3E5F5)),
+      ]));
+    },
+  );
+
+  Widget _statCard(String title, String value, IconData icon, Color color, Color bg) => Container(
+    padding: const EdgeInsets.all(20),
+    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20),
+      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 12, offset: const Offset(0, 4))],
+      border: Border.all(color: bg)),
+    child: Row(children: [
+      Container(padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(16)), child: Icon(icon, color: color, size: 30)),
+      const SizedBox(width: 18),
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: const TextStyle(color: Colors.black54, fontSize: 14)),
+        Text(value, style: TextStyle(color: color, fontSize: 22, fontWeight: FontWeight.bold)),
+      ]),
+    ]),
+  );
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<LanguageProvider>(
-      builder: (context, lang, child) {
-        return Scaffold(
-          extendBodyBehindAppBar: true,
-          appBar: AppBar(
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            title: const Text('Pharmacy', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20, color: Colors.white)),
-            actions: [
-               const ThemeIconButton(), // Theme toggle
-               IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.white), onPressed: () => _showDatePickerForReport(lang), tooltip: 'Hisobot'),
-               IconButton(
-                 icon: const Icon(Icons.logout_rounded, color: Colors.white),
-                 onPressed: () async {
-                   await FirebaseAuth.instance.signOut();
-                   if (context.mounted) {
-                     Navigator.of(context).pushAndRemoveUntil(
-                       MaterialPageRoute(builder: (_) => const LoginScreen()),
-                       (route) => false,
-                     );
-                   }
-                 },
-                 tooltip: 'Chiqish',
-               ),
-               const SizedBox(width: 8),
-            ],
-          ),
-          body: Stack(
-            children: [
-              // Background
-              Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Color(0xFF0A7075), Color(0xFF083D56), Color(0xFF0A2D4A), Color(0xFF0F1E3C)],
-                  ),
-                ),
-              ),
-              ...List.generate(6, (i) => _floatingParticle(i)),
-              
-              SafeArea(
-                child: Column(
-                  children: [
-                     Expanded(
-                        child: _selectedIndex == 0 ? _buildMedicinesPage(lang) :
-                               _selectedIndex == 1 ? _buildSalesPage(lang) :
-                               _buildStatisticsPage(lang)
-                     ),
-                  ],
-                ),
-              ),
+    return Consumer<LanguageProvider>(builder: (ctx, lang, _) => Scaffold(
+      backgroundColor: ML.bgPage,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        flexibleSpace: Container(decoration: const BoxDecoration(
+          gradient: LinearGradient(colors: [Color(0xFF06D6A0), Color(0xFF00B4D8)]),
+        )),
+        elevation: 0, toolbarHeight: 68,
+        leading: const SizedBox.shrink(),
+        title: Row(children: [
+          Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(12)),
+            child: const Icon(Icons.local_pharmacy_rounded, color: Colors.white, size: 24)),
+          const SizedBox(width: 12),
+          const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('MEDLINE', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 1)),
+            Text('Dorixona', style: TextStyle(fontSize: 11, color: Colors.white70)),
+          ]),
+        ]),
+        actions: [
+          IconButton(icon: const Icon(Icons.picture_as_pdf_rounded, color: Colors.white), onPressed: () async {
+            final d = await showDatePicker(context: context, initialDate: DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now());
+            if (d != null && mounted) _pdfReport(d, lang);
+          }, tooltip: 'Hisobot'),
+          IconButton(icon: const Icon(Icons.logout_rounded, color: Colors.white), onPressed: () async {
+            await FirebaseAuth.instance.signOut();
+            if (mounted) Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
+          }),
+          const SizedBox(width: 4),
+        ],
+        bottom: PreferredSize(preferredSize: const Size.fromHeight(3), child: Container(height: 3, color: Colors.white24)),
+      ),
+      body: FadeTransition(opacity: _fadeAnim, child: Column(children: [
+        Container(
+          margin: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), boxShadow: ML.cardShadow),
+          child: Row(children: [
+            _navItem(0, Icons.medication_rounded, lang.translate('medicines')),
+            _navItem(1, Icons.shopping_cart_rounded, lang.translate('sales')),
+            _navItem(2, Icons.bar_chart_rounded, lang.translate('statistics')),
+          ]),
+        ),
+        Expanded(child: _tab == 0 ? _medPage(lang) : _tab == 1 ? _salesPage(lang) : _statsPage(lang)),
+      ])),
+      floatingActionButton: _tab == 0 ? FloatingActionButton.extended(
+        backgroundColor: primary, foregroundColor: Colors.white,
+        onPressed: () => _addMedDialog(lang),
+        icon: const Icon(Icons.add_rounded),
+        label: Text(lang.translate('add_medicine') ?? 'Dori qo\'shish'),
+        elevation: 4,
+      ) : null,
+    ));
+  }
 
-              Positioned(
-                 bottom: 0,
-                 left: 0,
-                 right: 0,
-                 child: Container(
-                   margin: const EdgeInsets.all(16),
-                   decoration: BoxDecoration(
-                      color: const Color(0xFF1E2746).withOpacity(0.95), // Solid dark
-                      borderRadius: BorderRadius.circular(24),
-                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 20)],
-                   ),
-                   child: ClipRRect(
-                     borderRadius: BorderRadius.circular(24),
-                     child: BottomNavigationBar(
-                       currentIndex: _selectedIndex,
-                       onTap: (i) => setState(() => _selectedIndex = i),
-                       backgroundColor: Colors.transparent,
-                       selectedItemColor: const Color(0xFF4DB6AC),
-                       unselectedItemColor: Colors.white54, // Better contrast than grey
-                       showUnselectedLabels: false,
-                       elevation: 0,
-                       items: [
-                         BottomNavigationBarItem(icon: const Icon(Icons.medication), label: lang.translate('medicines')),
-                         BottomNavigationBarItem(icon: const Icon(Icons.shopping_cart), label: lang.translate('sales')),
-                         BottomNavigationBarItem(icon: const Icon(Icons.bar_chart), label: lang.translate('statistics')),
-                       ],
-                     ),
-                   ),
-                 ),
-              )
-            ],
-          ),
-          floatingActionButton: _selectedIndex == 0 ? Padding(
-            padding: const EdgeInsets.only(bottom: 80),
-            child: FloatingActionButton(
-              onPressed: () => _showAddMedicineDialog(lang),
-              backgroundColor: const Color(0xFF4DB6AC),
-              elevation: 4,
-              child: const Icon(Icons.add, color: Colors.white),
-            ),
-          ) : null,
-        );
-      },
-    );
+  Widget _navItem(int idx, IconData icon, String label) {
+    final sel = _tab == idx;
+    final grads = [ML.mintGrad, ML.amberGrad, ML.headerGrad];
+    return Expanded(child: GestureDetector(
+      onTap: () => setState(() => _tab = idx),
+      child: AnimatedContainer(duration: const Duration(milliseconds: 220),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(gradient: sel ? grads[idx] : null, borderRadius: BorderRadius.circular(13)),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 20, color: sel ? Colors.white : Colors.grey.shade400),
+          const SizedBox(height: 4),
+          Text(label, style: TextStyle(fontSize: 11, color: sel ? Colors.white : Colors.grey.shade400, fontWeight: sel ? FontWeight.w700 : FontWeight.normal)),
+        ]),
+      ),
+    ));
   }
 }

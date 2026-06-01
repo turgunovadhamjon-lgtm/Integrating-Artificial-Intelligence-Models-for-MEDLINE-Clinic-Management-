@@ -40,47 +40,50 @@ class MedlineApp extends StatelessWidget {
           return MaterialApp(
             title: 'MEDLINE',
             debugShowCheckedModeBanner: false,
-            themeMode: themeProvider.themeMode,
+            themeMode: ThemeMode.light,          // Har doim light theme
             theme: ThemeData(
               useMaterial3: true,
               brightness: Brightness.light,
               colorScheme: ColorScheme.fromSeed(
-                seedColor: ThemeProvider.lightPrimary,
+                seedColor: const Color(0xFF0077B6),
                 brightness: Brightness.light,
               ),
-              scaffoldBackgroundColor: ThemeProvider.lightBackground,
+              scaffoldBackgroundColor: const Color(0xFFF0F7FF),
+              canvasColor: Colors.white,          // Dropdown foni
+              cardColor: Colors.white,            // Card foni
+              dialogBackgroundColor: Colors.white,// Dialog foni
+              popupMenuTheme: const PopupMenuThemeData(color: Colors.white),
+              dialogTheme: DialogThemeData(
+                backgroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+              ),
+              textTheme: const TextTheme(
+                bodyLarge:   TextStyle(color: Color(0xFF023E8A)),
+                bodyMedium:  TextStyle(color: Color(0xFF023E8A)),
+                bodySmall:   TextStyle(color: Color(0xFF5E8DB8)),
+                titleLarge:  TextStyle(color: Color(0xFF023E8A), fontWeight: FontWeight.w700),
+                titleMedium: TextStyle(color: Color(0xFF023E8A)),
+              ),
+              listTileTheme: const ListTileThemeData(textColor: Color(0xFF023E8A)),
               elevatedButtonTheme: ElevatedButtonThemeData(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: ThemeProvider.lightPrimary,
+                  backgroundColor: const Color(0xFF0077B6),
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
               ),
               inputDecorationTheme: InputDecorationTheme(
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                filled: true,
+                fillColor: const Color(0xFFF5F9FF),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFFD0E8FF), width: 1.5)),
+                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFF0077B6), width: 2)),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                labelStyle: const TextStyle(color: Color(0xFF5E8DB8)),
               ),
-            ),
-            darkTheme: ThemeData(
-              useMaterial3: true,
-              brightness: Brightness.dark,
-              colorScheme: ColorScheme.fromSeed(
-                seedColor: ThemeProvider.darkPrimary,
-                brightness: Brightness.dark,
-              ),
-              scaffoldBackgroundColor: ThemeProvider.darkBackground,
-              elevatedButtonTheme: ElevatedButtonThemeData(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: ThemeProvider.darkPrimary,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-              inputDecorationTheme: InputDecorationTheme(
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              dropdownMenuTheme: const DropdownMenuThemeData(
+                menuStyle: MenuStyle(backgroundColor: WidgetStatePropertyAll(Colors.white)),
               ),
             ),
             home: const LoginScreen(),

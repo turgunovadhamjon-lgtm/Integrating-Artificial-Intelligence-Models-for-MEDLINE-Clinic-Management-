@@ -1,462 +1,350 @@
-// lib/screens/patients_list_screen.dart
-import 'dart:math';
+// lib/screens/patients_list_screen.dart — YANGI DIZAYN
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import 'package:printing/printing.dart';
+import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:intl/intl.dart';
-
+import 'package:printing/printing.dart';
+import 'package:provider/provider.dart';
 import '../providers/language_provider.dart';
+import '../theme/medline_theme.dart';
 
 class PatientsListScreen extends StatefulWidget {
   const PatientsListScreen({super.key});
-
   @override
   State<PatientsListScreen> createState() => _PatientsListScreenState();
 }
 
-class _PatientsListScreenState extends State<PatientsListScreen> with TickerProviderStateMixin {
-  String _searchQuery = '';
-  String _filterStatus = 'all'; // all, waiting, completed, paid, daily
-  String _sortBy = 'date'; // date, name, status
-  DateTime _selectedDate = DateTime.now();
+class _PatientsListScreenState extends State<PatientsListScreen> with SingleTickerProviderStateMixin {
+  String _search = '';
+  String _filter = 'all';
+  String _sort = 'date';
+  DateTime _date = DateTime.now();
+  late AnimationController _animCtrl;
+  late Animation<double> _fadeAnim;
 
-  late AnimationController _animationController;
-  late Animation<double> _fadeAnimation;
+  static const Color primary = Color(0xFF0077B6);
+  static const Color bgPage  = Color(0xFFF0F7FF);
+  static const Color doneClr = Color(0xFF06D6A0);
+  static const Color doneBg  = Color(0xFFE8FBF5);
+  static const Color pendClr = Color(0xFFFF6B35);
+  static const Color pendBg  = Color(0xFFFFF0EA);
 
   @override
   void initState() {
     super.initState();
-    _animationController = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1500));
-    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeOutCubic),
-    );
-    _animationController.forward();
+    _animCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
+    _fadeAnim = CurvedAnimation(parent: _animCtrl, curve: Curves.easeOut);
+    _animCtrl.forward();
   }
-
   @override
-  void dispose() {
-    _animationController.dispose();
-    super.dispose();
+  void dispose() { _animCtrl.dispose(); super.dispose(); }
+
+  String _fmtDate(Timestamp? ts) => ts == null ? '' : DateFormat('dd.MM.yyyy HH:mm').format(ts.toDate());
+  String _fmt(num n) => NumberFormat('#,###', 'uz_UZ').format(n);
+
+  pw.Widget _pdfCell(String text) => pw.Padding(
+    padding: const pw.EdgeInsets.all(8),
+    child: pw.Text(text, style: const pw.TextStyle(fontSize: 12)),
+  );
+
+  Future<void> _selectDate() async {
+    final d = await showDatePicker(context: context, initialDate: _date, firstDate: DateTime(2020), lastDate: DateTime.now().add(const Duration(days: 365)));
+    if (d != null) setState(() { _date = d; _filter = 'daily'; });
   }
 
-  // --- UTILS ---
-  Widget _floatingParticle(int index) {
-    final random = Random(index);
-    final size = random.nextDouble() * 100 + 50;
-    final duration = 20 + random.nextInt(15);
-    return AnimatedPositioned(
-      duration: Duration(seconds: duration),
-      curve: Curves.easeInOutSine,
-      top: -size,
-      left: (random.nextDouble() * 100).clamp(0.0, 95.0) * (MediaQuery.of(context).size.width / 100),
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: RadialGradient(
-            colors: [Colors.white.withOpacity(0.08), Colors.transparent],
-          ),
-          boxShadow: [
-             BoxShadow(color: Colors.white.withOpacity(0.06), blurRadius: 40, spreadRadius: 10),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _formatDate(Timestamp? timestamp) {
-    if (timestamp == null) return '';
-    final date = timestamp.toDate();
-    return DateFormat('dd.MM.yyyy HH:mm').format(date);
-  }
-
-  String _formatMoney(num amount) {
-    return '${NumberFormat('#,###', 'uz_UZ').format(amount)}';
-  }
-
-  // --- PDF ---
-  Future<void> _selectDate(LanguageProvider lang) async {
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: _selectedDate,
-      firstDate: DateTime(2020),
-      lastDate: DateTime.now().add(const Duration(days: 365)),
-      builder: (context, child) {
-        return Theme(
-          data: ThemeData.dark().copyWith(
-             colorScheme: const ColorScheme.dark(
-                primary: Color(0xFF4DB6AC),
-                onPrimary: Colors.white,
-                surface: Color(0xFF1E2746),
-                onSurface: Colors.white,
-             ),
-             dialogBackgroundColor: const Color(0xFF1E2746),
-          ),
-          child: child!,
-        );
-      },
-    );
-
-    if (picked != null && picked != _selectedDate) {
-      setState(() {
-        _selectedDate = picked;
-        _filterStatus = 'daily';
-      });
-    }
-  }
-
-  Future<void> _savePdfToDevice(LanguageProvider lang, List<QueryDocumentSnapshot> patients) async {
-     await _generatePdf(lang, patients, share: true);
-  }
-  
-  Future<void> _printDailyReport(LanguageProvider lang, List<QueryDocumentSnapshot> patients) async {
-     await _generatePdf(lang, patients, share: false);
-  }
-
-  Future<void> _generatePdf(LanguageProvider lang, List<QueryDocumentSnapshot> patients, {required bool share}) async {
-    final doctorsSnapshot = await FirebaseFirestore.instance.collection('users').where('role', isEqualTo: 'doctor').get();
-    final doctorNames = { for (var doc in doctorsSnapshot.docs) doc.id: (doc['name'] as String?)?.trim() ?? 'Unknown' };
-
-    final dateStr = DateFormat('dd.MM.yyyy').format(_selectedDate);
-    num totalAmount = 0;
-    num paidAmount = 0;
-    for (var doc in patients) {
-      final price = doc['price'] as num? ?? 0;
-      totalAmount += price;
-      if (doc['isPaid'] == true) paidAmount += price;
-    }
-
+  Future<void> _printReport(LanguageProvider lang, List<QueryDocumentSnapshot> patients) async {
+    final dsSnap = await FirebaseFirestore.instance.collection('users').where('role', isEqualTo: 'doctor').get();
+    final dNames = { for (var d in dsSnap.docs) d.id: (d['name'] as String?)?.trim() ?? 'N/A' };
+    final dateStr = DateFormat('dd.MM.yyyy').format(_date);
+    num total = 0, paid = 0;
+    for (var d in patients) { final p = d['price'] as num? ?? 0; total += p; if (d['isPaid'] == true) paid += p; }
     final pdf = pw.Document();
-    pdf.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.all(32),
-        build: (pw.Context context) {
-          return [
-            pw.Center(child: pw.Column(children: [
-               pw.Text('MEDLINE', style: pw.TextStyle(fontSize: 28, fontWeight: pw.FontWeight.bold)),
-               pw.SizedBox(height: 8),
-               pw.Text('Daily Report', style: const pw.TextStyle(fontSize: 18)),
-               pw.SizedBox(height: 4),
-               pw.Text(dateStr, style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
-            ])),
-            pw.SizedBox(height: 24),
+    pdf.addPage(pw.MultiPage(pageFormat: PdfPageFormat.a4, margin: const pw.EdgeInsets.all(32), build: (_) => [
+      pw.Center(child: pw.Column(children: [
+        pw.Text('MEDLINE', style: pw.TextStyle(fontSize: 28, fontWeight: pw.FontWeight.bold)),
+        pw.SizedBox(height: 6),
+        pw.Text('Kunlik Hisobot', style: const pw.TextStyle(fontSize: 18)),
+        pw.Text(dateStr, style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+      ])),
+      pw.SizedBox(height: 20),
+      pw.Container(padding: const pw.EdgeInsets.all(12), decoration: pw.BoxDecoration(border: pw.Border.all()), child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceAround, children: [
+        pw.Column(children: [pw.Text('${patients.length}', style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold)), pw.Text('Jami bemorlar')]),
+        pw.Column(children: [pw.Text('${_fmt(total)} so\'m', style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold)), pw.Text('Jami summa')]),
+        pw.Column(children: [pw.Text('${_fmt(paid)} so\'m', style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold)), pw.Text('To\'langan')]),
+      ])),
+      pw.SizedBox(height: 20),
+      pw.Table(border: pw.TableBorder.all(), children: [
+        pw.TableRow(decoration: const pw.BoxDecoration(color: PdfColors.blue100),
+            children: ['#','Bemor','Shikoyat','Shifokor','Summa','Holat']
+                .map((t) => pw.Padding(padding: const pw.EdgeInsets.all(8),
+                child: pw.Text(t, style: pw.TextStyle(fontWeight: pw.FontWeight.bold)))).toList()),
+        ...patients.asMap().entries.map((e) {
+          final d = e.value.data() as Map<String, dynamic>;
+          final isPaid = d['isPaid'] == true;
+          final issue = (d['issue'] ?? '').toString();
+          return pw.TableRow(children: [
+            _pdfCell('${e.key + 1}'),
+            _pdfCell('${d['name'] ?? ''} ${d['surname'] ?? ''}'.trim()),
+            _pdfCell(issue.length > 25 ? '${issue.substring(0, 25)}...' : issue),
+            _pdfCell(dNames[d['doctorId']] ?? '-'),
+            _pdfCell('${_fmt(d['price'] ?? 0)} so\'m'),
             pw.Container(
-               padding: const pw.EdgeInsets.all(12),
-               decoration: pw.BoxDecoration(border: pw.Border.all(), borderRadius: pw.BorderRadius.circular(8)),
-               child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceAround, children: [
-                  pw.Column(children: [pw.Text('${patients.length}', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)), pw.Text('Total Patients')]),
-                  pw.Column(children: [pw.Text(_formatMoney(totalAmount), style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)), pw.Text('Total Amount')]),
-                  pw.Column(children: [pw.Text(_formatMoney(paidAmount), style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)), pw.Text('Paid')]),
-               ]),
-            ),
-            pw.SizedBox(height: 24),
-            pw.Table(border: pw.TableBorder.all(), columnWidths: {0: const pw.FixedColumnWidth(30), 4: const pw.FixedColumnWidth(70), 5: const pw.FixedColumnWidth(50)}, children: [
-               pw.TableRow(decoration: const pw.BoxDecoration(color: PdfColors.grey300), children: ['#', 'Patient', 'Complaint', 'Doctor', 'Amount', 'Paid'].map((t) => pw.Padding(padding: const pw.EdgeInsets.all(8), child: pw.Text(t, style: pw.TextStyle(fontWeight: pw.FontWeight.bold)))).toList()),
-               ...patients.asMap().entries.map((entry) {
-                  final data = entry.value.data() as Map<String, dynamic>;
-                  return pw.TableRow(children: [
-                     pw.Text('${entry.key + 1}'),
-                     pw.Text('${data['name'] ?? ''} ${data['surname'] ?? ''}'),
-                     pw.Text((data['issue'] as String? ?? '').length > 30 ? '${(data['issue'] ?? '').substring(0, 30)}...' : (data['issue'] ?? '')),
-                     pw.Text(doctorNames[data['doctorId']] ?? ''),
-                     pw.Text(_formatMoney(data['price'] ?? 0)),
-                     pw.Text((data['isPaid'] ?? false) ? '+' : '-'),
-                  ].map((w) => pw.Padding(padding: const pw.EdgeInsets.all(8), child: w)).toList());
-               }).toList(),
-            ]),
-            pw.SizedBox(height: 24),
-            pw.Divider(),
-            pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
-               pw.Text('Printed: ${DateFormat('dd.MM.yyyy HH:mm').format(DateTime.now())}', style: const pw.TextStyle(fontSize: 10)),
-               pw.Text('MEDLINE System', style: const pw.TextStyle(fontSize: 10)),
-            ]),
-          ];
-        },
-      ),
-    );
-    
-    final name = 'MEDLINE_${dateStr.replaceAll('.', '_')}.pdf';
-    if (share) {
-       await Printing.sharePdf(bytes: await pdf.save(), filename: name);
-    } else {
-       await Printing.layoutPdf(onLayout: (format) async => pdf.save(), name: name);
-    }
-  }
-
-  // --- WIDGETS ---
-  Widget _buildStatCard(String label, String value, IconData icon, Color color, {bool isSelected = false, VoidCallback? onTap, String? subtitle}) {
-     return GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-           duration: const Duration(milliseconds: 200),
-           padding: const EdgeInsets.all(12),
-           decoration: BoxDecoration(
-              color: isSelected ? color.withOpacity(0.2) : Colors.white.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: isSelected ? color : Colors.white.withOpacity(0.1)),
-              boxShadow: isSelected ? [BoxShadow(color: color.withOpacity(0.3), blurRadius: 10)] : [],
-           ),
-           child: Column(
-              children: [
-                 Icon(icon, color: color, size: 24),
-                 const SizedBox(height: 8),
-                 Text(value, style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                 Text(label, style: const TextStyle(color: Colors.white60, fontSize: 10), textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis),
-                 if (subtitle != null) Text(subtitle, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
-              ],
-           ),
-        ),
-     );
-  }
-
-  Widget _buildPatientCard(QueryDocumentSnapshot doc, LanguageProvider lang) {
-     final data = doc.data() as Map<String, dynamic>;
-     final isPaid = data['isPaid'] ?? false;
-     final status = data['status'] ?? 'waiting';
-     final color = status == 'completed' ? Colors.green : Colors.orange;
-     
-     return Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        decoration: BoxDecoration(
-           color: Colors.white.withOpacity(0.05),
-           borderRadius: BorderRadius.circular(16),
-           border: Border.all(color: Colors.white.withOpacity(0.1)),
-        ),
-        child: ListTile(
-           contentPadding: const EdgeInsets.all(16),
-           onTap: () => _showPatientDetails(doc, lang),
-           leading: CircleAvatar(backgroundColor: Colors.white.withOpacity(0.1), child: Text((data['name'] ?? '?')[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
-           title: Text('${data['name'] ?? ''} ${data['surname'] ?? ''}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-           subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              if (data['queue'] != null) Text("${lang.translate('queue')}: ${data['queue']}", style: const TextStyle(color: Colors.white60)),
-              Text(_formatDate(data['createdAt']), style: const TextStyle(color: Colors.white54, fontSize: 12)),
-           ]),
-           trailing: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Container(
-                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                 decoration: BoxDecoration(color: color.withOpacity(0.2), borderRadius: BorderRadius.circular(8)),
-                 child: Text(lang.translate(status), style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
+              color: isPaid ? PdfColors.green100 : PdfColors.red50,
+              padding: const pw.EdgeInsets.all(8),
+              child: pw.Text(
+                isPaid ? "To'langan" : "To'lanmagan",
+                style: pw.TextStyle(
+                  color: isPaid ? PdfColors.green800 : PdfColors.red700,
+                  fontWeight: pw.FontWeight.bold,
+                  fontSize: 11,
+                ),
               ),
-              const SizedBox(height: 4),
-              Text('${_formatMoney(data['price'] ?? 0)} UZS', style: TextStyle(color: isPaid ? Colors.greenAccent : Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.bold)),
-           ]),
-        ),
-     );
-  }
-
-  void _showPatientDetails(QueryDocumentSnapshot doc, LanguageProvider lang) {
-     final data = doc.data() as Map<String, dynamic>;
-     showModalBottomSheet(
-        context: context,
-        backgroundColor: Colors.transparent,
-        isScrollControlled: true,
-        builder: (context) => Container(
-           height: MediaQuery.of(context).size.height * 0.8,
-           decoration: BoxDecoration(
-              color: const Color(0xFF1E2746).withOpacity(0.95),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-              border: Border.all(color: Colors.white.withOpacity(0.1)),
-           ),
-           child: Column(
-              children: [
-                 Container(width: 40, height: 4, margin: const EdgeInsets.symmetric(vertical: 12), decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2))),
-                 Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Row(children: [
-                       CircleAvatar(radius: 30, backgroundColor: Colors.white.withOpacity(0.1), child: Text((data['name'] ?? '?')[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold))),
-                       const SizedBox(width: 16),
-                       Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text('${data['name'] ?? ''} ${data['surname'] ?? ''}', style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                          Text(_formatDate(data['createdAt']), style: const TextStyle(color: Colors.white60)),
-                       ])),
-                       IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close, color: Colors.white)),
-                    ]),
-                 ),
-                 const Divider(color: Colors.white10),
-                 Expanded(
-                    child: ListView(padding: const EdgeInsets.all(24), children: [
-                       _detailItem(Icons.numbers, lang.translate('queue'), data['queue']),
-                       _detailItem(Icons.location_on, lang.translate('address'), data['address']),
-                       _detailItem(Icons.healing, lang.translate('issue'), data['issue']),
-                       FutureBuilder<DocumentSnapshot>(
-                          future: FirebaseFirestore.instance.collection('users').doc(data['doctorId']).get(),
-                          builder: (context, snap) => _detailItem(Icons.medical_services, lang.translate('doctor'), snap.data?['name'] ?? 'Loading...'),
-                       ),
-                       _detailItem(Icons.price_check, lang.translate('price'), '${_formatMoney(data['price'] ?? 0)} UZS'),
-                       _detailItem(Icons.payment, lang.translate('status'), data['isPaid'] == true ? lang.translate('paid') : lang.translate('unpaid'), color: data['isPaid'] == true ? Colors.greenAccent : Colors.orangeAccent),
-                    ]),
-                 ),
-              ],
-           ),
-        ),
-     );
-  }
-
-  Widget _detailItem(IconData icon, String label, String? value, {Color? color}) {
-     if (value == null || value.isEmpty) return const SizedBox();
-     return Padding(
-        padding: const EdgeInsets.only(bottom: 16),
-        child: Row(children: [
-           Icon(icon, color: Colors.white60, size: 20),
-           const SizedBox(width: 12),
-           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(label, style: const TextStyle(color: Colors.white60, fontSize: 12)),
-              Text(value, style: TextStyle(color: color ?? Colors.white, fontSize: 16)),
-           ])),
-        ]),
-     );
+            ),
+          ]);
+        }),
+      ]),
+      pw.SizedBox(height: 20),
+      pw.Text('Chop etildi: ${DateFormat('dd.MM.yyyy HH:mm').format(DateTime.now())}', style: const pw.TextStyle(fontSize: 10)),
+    ]));
+    await Printing.layoutPdf(onLayout: (_) => pdf.save(), name: 'MEDLINE_$dateStr.pdf');
   }
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<LanguageProvider>(
-      builder: (context, lang, child) {
-        return Scaffold(
-          extendBodyBehindAppBar: true,
-          appBar: AppBar(
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            title: const Text('Patients List', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            actions: [
-               Theme(data: Theme.of(context).copyWith(cardColor: const Color(0xFF1E2746), iconTheme: const IconThemeData(color: Colors.white)), child: PopupMenuButton<String>(
-                  icon: const Icon(Icons.filter_list, color: Colors.white),
-                  onSelected: (v) => setState(() => _filterStatus = v),
-                  itemBuilder: (ctx) => ['all', 'waiting', 'completed', 'paid'].map((v) => PopupMenuItem(value: v, child: Text(lang.translate(v + (v == 'all' ? '_patients' : '')), style: const TextStyle(color: Colors.white)))).toList(),
-               )),
-               Theme(data: Theme.of(context).copyWith(cardColor: const Color(0xFF1E2746), iconTheme: const IconThemeData(color: Colors.white)), child: PopupMenuButton<String>(
-                  icon: const Icon(Icons.sort, color: Colors.white),
-                  onSelected: (v) => setState(() => _sortBy = v),
-                  itemBuilder: (ctx) => ['date', 'name', 'status'].map((v) => PopupMenuItem(value: v, child: Text(lang.translate('sort_by_$v'), style: const TextStyle(color: Colors.white)))).toList(),
-               )),
+    return Consumer<LanguageProvider>(builder: (ctx, lang, _) => Scaffold(
+      backgroundColor: bgPage,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        flexibleSpace: Container(decoration: const BoxDecoration(
+          gradient: LinearGradient(colors: [Color(0xFF0077B6), Color(0xFF00B4D8)]),
+        )),
+        elevation: 0, toolbarHeight: 66,
+        title: Row(children: [
+          Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.people_alt_rounded, color: Colors.white, size: 22)),
+          const SizedBox(width: 10),
+          Text(lang.translate('patients_list') ?? 'Bemorlar ro\'yxati', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+        ]),
+        actions: [
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.filter_list_rounded, color: Colors.white),
+            onSelected: (v) => setState(() => _filter = v),
+            itemBuilder: (_) => [
+              PopupMenuItem(value: 'all', child: Text(lang.translate('all'))),
+              PopupMenuItem(value: 'waiting', child: Text(lang.translate('waiting'))),
+              PopupMenuItem(value: 'completed', child: Text(lang.translate('completed'))),
+              PopupMenuItem(value: 'paid', child: Text(lang.translate('paid'))),
             ],
           ),
-          body: Stack(
-            children: [
-               Container(decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFF0A7075), Color(0xFF083D56), Color(0xFF0A2D4A)]))),
-               ...List.generate(6, (i) => _floatingParticle(i)),
-               SafeArea(
-                  child: Column(
-                     children: [
-                        Padding(
-                           padding: const EdgeInsets.all(16),
-                           child: TextField(
-                              style: const TextStyle(color: Colors.white),
-                              decoration: InputDecoration(
-                                 hintText: lang.translate('search_patients'),
-                                 hintStyle: const TextStyle(color: Colors.white54),
-                                 prefixIcon: const Icon(Icons.search, color: Colors.white54),
-                                 suffixIcon: _searchQuery.isNotEmpty ? IconButton(icon: const Icon(Icons.clear, color: Colors.white), onPressed: () => setState(() => _searchQuery = '')) : null,
-                                 filled: true, fillColor: Colors.white.withOpacity(0.05),
-                                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                              ),
-                              onChanged: (v) => setState(() => _searchQuery = v.toLowerCase()),
-                           ),
-                        ),
-                        // Stats
-                        StreamBuilder<QuerySnapshot>(
-                           stream: FirebaseFirestore.instance.collection('patients').snapshots(),
-                           builder: (context, snapshot) {
-                              if (!snapshot.hasData) return const SizedBox();
-                              final docs = snapshot.data!.docs;
-                              final total = docs.length;
-                              final waiting = docs.where((d) => d['status'] == 'waiting').length;
-                              final completed = docs.where((d) => d['status'] == 'completed').length;
-                              final paid = docs.where((d) => d['isPaid'] == true).length;
-                              final paidAmount = docs.where((d) => d['isPaid'] == true).fold(0.0, (sum, d) => sum + (d['price'] ?? 0));
-                              
-                              final dailyDocs = docs.where((d) {
-                                 final dt = (d['createdAt'] as Timestamp?)?.toDate();
-                                 if (dt == null) return false;
-                                 return dt.year == _selectedDate.year && dt.month == _selectedDate.month && dt.day == _selectedDate.day;
-                              }).toList();
-                              
-                              return Padding(
-                                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                                 child: Column(children: [
-                                    Row(children: [
-                                       Expanded(child: _buildStatCard(lang.translate('total'), '$total', Icons.people, Colors.blueAccent, isSelected: _filterStatus == 'all', onTap: () => setState(() => _filterStatus = 'all'))),
-                                       const SizedBox(width: 8),
-                                       Expanded(child: _buildStatCard(lang.translate('waiting'), '$waiting', Icons.pending, Colors.orangeAccent, isSelected: _filterStatus == 'waiting', onTap: () => setState(() => _filterStatus = 'waiting'))),
-                                       const SizedBox(width: 8),
-                                       Expanded(child: _buildStatCard(lang.translate('completed'), '$completed', Icons.check_circle, Colors.greenAccent, isSelected: _filterStatus == 'completed', onTap: () => setState(() => _filterStatus = 'completed'))),
-                                       const SizedBox(width: 8),
-                                       Expanded(child: _buildStatCard(lang.translate('paid'), '$paid', Icons.attach_money, Colors.tealAccent, subtitle: _formatMoney(paidAmount), isSelected: _filterStatus == 'paid', onTap: () => setState(() => _filterStatus = 'paid'))),
-                                    ]),
-                                    const SizedBox(height: 12),
-                                    // Daily Card
-                                    GestureDetector(
-                                       onTap: () => setState(() => _filterStatus = 'daily'),
-                                       child: AnimatedContainer(
-                                          duration: const Duration(milliseconds: 200),
-                                          padding: const EdgeInsets.all(12),
-                                          decoration: BoxDecoration(color: _filterStatus == 'daily' ? Colors.purpleAccent.withOpacity(0.2) : Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(16), border: Border.all(color: _filterStatus == 'daily' ? Colors.purpleAccent : Colors.white.withOpacity(0.1))),
-                                          child: Row(children: [
-                                             const Icon(Icons.calendar_today, color: Colors.purpleAccent),
-                                             const SizedBox(width: 12),
-                                             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                                Text(DateFormat('dd.MM.yyyy').format(_selectedDate), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                                                Text('${dailyDocs.length} patients | ${_formatMoney(dailyDocs.where((d) => d['isPaid'] == true).fold(0.0, (s, d) => s + (d['price'] ?? 0)))} UZS', style: const TextStyle(color: Colors.white60, fontSize: 12)),
-                                             ])),
-                                             IconButton(icon: const Icon(Icons.edit_calendar, color: Colors.white70), onPressed: () => _selectDate(lang)),
-                                             if (dailyDocs.isNotEmpty) IconButton(icon: const Icon(Icons.print, color: Colors.white70), onPressed: () => _printDailyReport(lang, dailyDocs)),
-                                             if (dailyDocs.isNotEmpty) IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.white70), onPressed: () => _savePdfToDevice(lang, dailyDocs)),
-                                          ]),
-                                       ),
-                                    ),
-                                 ]),
-                              );
-                           },
-                        ),
-                        const SizedBox(height: 16),
-                        Expanded(child: StreamBuilder<QuerySnapshot>(
-                           stream: FirebaseFirestore.instance.collection('patients').snapshots(),
-                           builder: (context, snapshot) {
-                              if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-                              var list = snapshot.data!.docs;
-                              
-                              if (_filterStatus == 'waiting') list = list.where((d) => d['status'] == 'waiting').toList();
-                              else if (_filterStatus == 'completed') list = list.where((d) => d['status'] == 'completed').toList();
-                              else if (_filterStatus == 'paid') list = list.where((d) => d['isPaid'] == true).toList();
-                              else if (_filterStatus == 'daily') list = list.where((d) {
-                                 final dt = (d['createdAt'] as Timestamp?)?.toDate();
-                                 if (dt == null) return false;
-                                 return dt.year == _selectedDate.year && dt.month == _selectedDate.month && dt.day == _selectedDate.day;
-                              }).toList();
-                              
-                              if (_searchQuery.isNotEmpty) {
-                                 list = list.where((d) => (d['name'] ?? '').toString().toLowerCase().contains(_searchQuery) || (d['surname'] ?? '').toString().toLowerCase().contains(_searchQuery)).toList();
-                              }
-                              
-                              list.sort((a, b) {
-                                 if (_sortBy == 'name') return (a['name'] ?? '').compareTo(b['name'] ?? '');
-                                 if (_sortBy == 'status') return (a['status'] ?? '').compareTo(b['status'] ?? '');
-                                 final da = (a['createdAt'] as Timestamp?)?.toDate() ?? DateTime(0);
-                                 final db = (b['createdAt'] as Timestamp?)?.toDate() ?? DateTime(0);
-                                 return db.compareTo(da);
-                              });
-                              
-                              if (list.isEmpty) return Center(child: Text(lang.translate('no_patients'), style: const TextStyle(color: Colors.white60)));
-                              
-                              return ListView.builder(
-                                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                                 itemCount: list.length,
-                                 itemBuilder: (context, index) => _buildPatientCard(list[index], lang),
-                              );
-                           },
-                        )),
-                     ],
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.sort_rounded, color: Colors.white),
+            onSelected: (v) => setState(() => _sort = v),
+            itemBuilder: (_) => [
+              PopupMenuItem(value: 'date', child: Text(lang.translate('sort_by_date') ?? 'Sana')),
+              PopupMenuItem(value: 'name', child: Text(lang.translate('sort_by_name') ?? 'Ism')),
+              PopupMenuItem(value: 'status', child: Text(lang.translate('sort_by_status') ?? 'Holat')),
+            ],
+          ),
+          const SizedBox(width: 4),
+        ],
+        bottom: PreferredSize(preferredSize: const Size.fromHeight(3), child: Container(height: 3, decoration: const BoxDecoration(gradient: LinearGradient(colors: [Color(0xFF29B6F6), Color(0xFF00BCD4)])))),
+      ),
+      body: FadeTransition(opacity: _fadeAnim, child: Column(children: [
+        Container(color: Colors.white, padding: const EdgeInsets.all(12), child: TextField(
+          style: const TextStyle(fontSize: 15),
+          decoration: InputDecoration(
+            hintText: lang.translate('search_patients'),
+            prefixIcon: const Icon(Icons.search_rounded, color: primary, size: 20),
+            suffixIcon: _search.isNotEmpty ? IconButton(icon: const Icon(Icons.clear, color: Colors.grey), onPressed: () => setState(() => _search = '')) : null,
+            filled: true, fillColor: const Color(0xFFF5F9FF),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFFD6E4FF))),
+            contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+          ),
+          onChanged: (v) => setState(() => _search = v.toLowerCase()),
+        )),
+        // Stats bar
+        StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance.collection('patients').snapshots(),
+          builder: (ctx, snap) {
+            if (!snap.hasData) return const SizedBox();
+            final docs = snap.data!.docs;
+            final total = docs.length;
+            final wait = docs.where((d) => d['status'] == 'waiting').length;
+            final done = docs.where((d) => d['status'] == 'completed').length;
+            final paid = docs.where((d) => d['isPaid'] == true).length;
+            final paidAmt = docs.where((d) => d['isPaid'] == true).fold(0.0, (s, d) => s + (d['price'] as num? ?? 0).toDouble());
+            final dailyDocs = docs.where((d) { final dt = (d['createdAt'] as Timestamp?)?.toDate(); if (dt == null) return false; return dt.year == _date.year && dt.month == _date.month && dt.day == _date.day; }).toList();
+            return Container(color: Colors.white, padding: const EdgeInsets.fromLTRB(12, 0, 12, 10), child: Column(children: [
+              Row(children: [
+                _sCard('$total', lang.translate('all'), Icons.people_rounded, const Color(0xFF1565C0), const Color(0xFFE3F2FD), 'all'),
+                const SizedBox(width: 6),
+                _sCard('$wait', lang.translate('waiting'), Icons.access_time_rounded, pendClr, pendBg, 'waiting'),
+                const SizedBox(width: 6),
+                _sCard('$done', lang.translate('completed'), Icons.check_circle_rounded, doneClr, doneBg, 'completed'),
+                const SizedBox(width: 6),
+                _sCard('$paid', lang.translate('paid'), Icons.payments_rounded, const Color(0xFF00838F), const Color(0xFFE0F7FA), 'paid'),
+              ]),
+              const SizedBox(height: 8),
+              GestureDetector(onTap: () => setState(() => _filter = 'daily'), child: AnimatedContainer(duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(color: _filter == 'daily' ? const Color(0xFFEDE7F6) : const Color(0xFFF5F9FF), borderRadius: BorderRadius.circular(12), border: Border.all(color: _filter == 'daily' ? const Color(0xFF6A1B9A) : const Color(0xFFD6E4FF))),
+                child: Row(children: [
+                  Icon(Icons.calendar_today_rounded, color: _filter == 'daily' ? const Color(0xFF6A1B9A) : Colors.grey, size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(DateFormat('dd.MM.yyyy').format(_date), style: TextStyle(fontWeight: FontWeight.bold, color: _filter == 'daily' ? const Color(0xFF4A148C) : Colors.black87, fontSize: 13)),
+                    Text('${dailyDocs.length} bemor  •  ${_fmt(dailyDocs.where((d) => d['isPaid'] == true).fold(0.0, (s, d) => s + (d['price'] as num? ?? 0).toDouble()))} so\'m', style: const TextStyle(fontSize: 11, color: Colors.black45)),
+                  ])),
+                  IconButton(icon: const Icon(Icons.edit_calendar_rounded, size: 18, color: Colors.grey), onPressed: _selectDate, padding: EdgeInsets.zero, constraints: const BoxConstraints()),
+                  const SizedBox(width: 8),
+                  if (dailyDocs.isNotEmpty) IconButton(icon: const Icon(Icons.print_rounded, size: 18, color: Colors.grey), onPressed: () => _printReport(lang, dailyDocs), padding: EdgeInsets.zero, constraints: const BoxConstraints()),
+                ]),
+              )),
+            ]));
+          },
+        ),
+        // List
+        Expanded(child: StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance.collection('patients').snapshots(),
+          builder: (ctx, snap) {
+            if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: primary));
+            var list = snap.data!.docs;
+            if (_filter == 'waiting') list = list.where((d) => d['status'] == 'waiting').toList();
+            else if (_filter == 'completed') list = list.where((d) => d['status'] == 'completed').toList();
+            else if (_filter == 'paid') list = list.where((d) => d['isPaid'] == true).toList();
+            else if (_filter == 'daily') list = list.where((d) { final dt = (d['createdAt'] as Timestamp?)?.toDate(); if (dt == null) return false; return dt.year == _date.year && dt.month == _date.month && dt.day == _date.day; }).toList();
+            if (_search.isNotEmpty) list = list.where((d) => (d['name']??'').toString().toLowerCase().contains(_search) || (d['surname']??'').toString().toLowerCase().contains(_search)).toList();
+            list.sort((a, b) {
+              if (_sort == 'name') return (a['name']??'').compareTo(b['name']??'');
+              if (_sort == 'status') return (a['status']??'').compareTo(b['status']??'');
+              final da = (a['createdAt'] as Timestamp?)?.toDate() ?? DateTime(0);
+              final db = (b['createdAt'] as Timestamp?)?.toDate() ?? DateTime(0);
+              return db.compareTo(da);
+            });
+            if (list.isEmpty) return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Container(padding: const EdgeInsets.all(24), decoration: BoxDecoration(color: const Color(0xFFE3F2FD), shape: BoxShape.circle), child: const Icon(Icons.people_alt_rounded, size: 48, color: primary)),
+              const SizedBox(height: 16), Text(lang.translate('no_patients'), style: const TextStyle(color: Colors.black45, fontSize: 16)),
+            ]));
+            return ListView.builder(
+              padding: const EdgeInsets.all(14),
+              itemCount: list.length,
+              itemBuilder: (_, i) {
+                final d = list[i].data() as Map<String, dynamic>;
+                final done = d['status'] == 'completed';
+                final paid = d['isPaid'] ?? false;
+                final name = '${d['name']??''} ${d['surname']??''}'.trim();
+                final init = name.isNotEmpty ? name[0].toUpperCase() : 'B';
+                return GestureDetector(
+                  onTap: () => _patientDetail(d, lang),
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16),
+                        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8, offset: const Offset(0, 2))],
+                        border: Border.all(color: done ? const Color(0xFFA5D6A7) : const Color(0xFFFFCC80))),
+                    child: Padding(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12), child: Row(children: [
+                      Container(width: 44, height: 44, decoration: BoxDecoration(gradient: LinearGradient(colors: done ? [doneClr, const Color(0xFF4CAF50)] : [primary, const Color(0xFF42A5F5)]), borderRadius: BorderRadius.circular(12)),
+                          child: Center(child: Text(init, style: const TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.bold)))),
+                      const SizedBox(width: 12),
+                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(name.isNotEmpty ? name : 'Bemor', style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.black87, fontSize: 15)),
+                        const SizedBox(height: 3),
+                        Row(children: [
+                          Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: done ? doneBg : pendBg, borderRadius: BorderRadius.circular(20)),
+                              child: Text(done ? lang.translate('completed') : lang.translate('waiting'), style: TextStyle(fontSize: 11, color: done ? doneClr : pendClr, fontWeight: FontWeight.w600))),
+                          if (d['queue'] != null) ...[const SizedBox(width: 6), Text('№${d['queue']}', style: const TextStyle(fontSize: 11, color: Colors.black45))],
+                        ]),
+                        Text(_fmtDate(d['createdAt']), style: const TextStyle(fontSize: 11, color: Colors.black38)),
+                      ])),
+                      Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                        Text('${_fmt(d['price'] as num? ?? 0)} so\'m', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: primary)),
+                        const SizedBox(height: 4),
+                        Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(paid ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded, size: 13, color: paid ? doneClr : Colors.orange),
+                          const SizedBox(width: 3),
+                          Text(paid ? lang.translate('paid') : lang.translate('unpaid'), style: TextStyle(fontSize: 11, color: paid ? doneClr : Colors.orange, fontWeight: FontWeight.w600)),
+                        ]),
+                      ]),
+                    ])),
                   ),
-               ),
+                );
+              },
+            );
+          },
+        )),
+      ])),
+    ));
+  }
+
+  Widget _sCard(String val, String label, IconData icon, Color color, Color bg, String filterKey) {
+    final sel = _filter == filterKey;
+    return Expanded(child: GestureDetector(
+      onTap: () => setState(() => _filter = filterKey),
+      child: AnimatedContainer(duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+        decoration: BoxDecoration(color: sel ? color : bg, borderRadius: BorderRadius.circular(12), border: Border.all(color: sel ? color : color.withOpacity(0.3))),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 18, color: sel ? Colors.white : color),
+          const SizedBox(height: 2),
+          Text(val, style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: sel ? Colors.white : color)),
+          Text(label, style: TextStyle(fontSize: 9, color: sel ? Colors.white70 : Colors.black45), textAlign: TextAlign.center, overflow: TextOverflow.ellipsis),
+        ]),
+      ),
+    ));
+  }
+
+  void _patientDetail(Map<String, dynamic> d, LanguageProvider lang) {
+    final name = '${d['name']??''} ${d['surname']??''}'.trim();
+    final done = d['status'] == 'completed';
+    final paid = d['isPaid'] ?? false;
+    showDialog(context: context, builder: (ctx) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: Container(
+        constraints: const BoxConstraints(maxHeight: 520),
+        child: Column(children: [
+          Container(padding: const EdgeInsets.all(20), decoration: BoxDecoration(gradient: LinearGradient(colors: done ? [doneClr, const Color(0xFF4CAF50)] : [primary, const Color(0xFF42A5F5)]), borderRadius: const BorderRadius.vertical(top: Radius.circular(24))),
+              child: Row(children: [
+                CircleAvatar(backgroundColor: Colors.white.withOpacity(0.2), radius: 26, child: Text(name.isNotEmpty ? name[0].toUpperCase() : 'B', style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold))),
+                const SizedBox(width: 14),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(name.isNotEmpty ? name : 'Bemor', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                  Text(_fmtDate(d['createdAt']), style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                ])),
+                IconButton(icon: const Icon(Icons.close, color: Colors.white), onPressed: () => Navigator.pop(ctx)),
+              ])),
+          Expanded(child: ListView(padding: const EdgeInsets.all(20), children: [
+            _dRow(Icons.format_list_numbered_rounded, lang.translate('queue'), d['queue']?.toString(), primary),
+            _dRow(Icons.location_on_rounded, lang.translate('address'), d['address'], const Color(0xFF6A1B9A)),
+            _dRow(Icons.healing_rounded, lang.translate('issue'), d['issue'], Colors.red.shade700),
+            FutureBuilder<DocumentSnapshot>(
+              future: FirebaseFirestore.instance.collection('users').doc(d['doctorId']).get(),
+              builder: (_, s) => _dRow(Icons.medical_services_rounded, lang.translate('doctor'), s.data?['name'] ?? '...', const Color(0xFF1565C0)),
+            ),
+            _dRow(Icons.payments_rounded, lang.translate('price'), '${_fmt(d['price']??0)} so\'m', const Color(0xFF1B5E20)),
+            _dRow(paid ? Icons.check_circle_rounded : Icons.cancel_rounded, lang.translate('payment'), paid ? lang.translate('paid') : lang.translate('unpaid'), paid ? doneClr : pendClr),
+            if (d['diagnosis'] != null && (d['diagnosis'] as String).isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: doneBg, borderRadius: BorderRadius.circular(14), border: Border.all(color: const Color(0xFFA5D6A7))), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Row(children: [Icon(Icons.assignment_turned_in_rounded, size: 14, color: doneClr), SizedBox(width: 6), Text('Diagnoz', style: TextStyle(color: doneClr, fontWeight: FontWeight.bold, fontSize: 13))]),
+                const SizedBox(height: 6),
+                Text(d['diagnosis'], style: const TextStyle(color: Color(0xFF1B5E20))),
+              ])),
             ],
-          ),
-        );
-      },
-    );
+          ])),
+        ]),
+      ),
+    ));
+  }
+
+  Widget _dRow(IconData icon, String label, String? val, Color color) {
+    if (val == null || val.isEmpty) return const SizedBox();
+    return Padding(padding: const EdgeInsets.only(bottom: 14), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(10)), child: Icon(icon, color: color, size: 18)),
+      const SizedBox(width: 12),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label, style: const TextStyle(fontSize: 12, color: Colors.black45, fontWeight: FontWeight.w500)),
+        Text(val, style: const TextStyle(fontSize: 15, color: Colors.black87)),
+      ])),
+    ]));
   }
 }

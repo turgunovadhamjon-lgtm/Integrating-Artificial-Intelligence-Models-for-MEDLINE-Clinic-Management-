@@ -1,560 +1,398 @@
 // lib/screens/doctor_dashboard.dart
-import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/language_provider.dart';
-import '../providers/theme_provider.dart';
-import '../widgets/theme_toggle.dart';
+import '../theme/medline_theme.dart';
 import 'login_screen.dart';
-import '../utils/date_utils.dart';
+import 'patient_history_screen.dart';
 
 class DoctorDashboard extends StatefulWidget {
   const DoctorDashboard({super.key});
-
-  @override
-  State<DoctorDashboard> createState() => _DoctorDashboardState();
+  @override State<DoctorDashboard> createState() => _DoctorDashboardState();
 }
 
-class _DoctorDashboardState extends State<DoctorDashboard> with TickerProviderStateMixin {
-  String _selectedTab = 'waiting'; // waiting, completed
-  late AnimationController _animationController;
-  late Animation<double> _fadeAnimation;
-  
-  // Note: _pulseController removed if not used, or re-add if needed for logo pulsing
-  
+class _DoctorDashboardState extends State<DoctorDashboard> with SingleTickerProviderStateMixin {
+  String _tab = 'waiting';
+  late AnimationController _ac;
+  late Animation<double> _fade;
+
   @override
   void initState() {
     super.initState();
-    _animationController = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1500));
-    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeOutCubic),
-    );
-    _animationController.forward();
+    _ac = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
+    _fade = CurvedAnimation(parent: _ac, curve: Curves.easeOut);
+    _ac.forward();
   }
-
-  Widget _floatingParticle(int index) {
-    final random = Random(index);
-    final size = random.nextDouble() * 100 + 50;
-    final duration = 20 + random.nextInt(15);
-    return AnimatedPositioned(
-      duration: Duration(seconds: duration),
-      curve: Curves.easeInOutSine,
-      top: -size,
-      left: (random.nextDouble() * 100).clamp(0.0, 95.0) * (MediaQuery.of(context).size.width / 100),
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: RadialGradient(
-            colors: [Colors.white.withOpacity(0.08), Colors.transparent],
-          ),
-          boxShadow: [
-            BoxShadow(color: Colors.white.withOpacity(0.06), blurRadius: 40, spreadRadius: 10),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showLanguageDialog() {
-    final lang = Provider.of<LanguageProvider>(context, listen: false);
-    showDialog(
-      context: context,
-      builder: (_) => Dialog(
-        backgroundColor: Colors.transparent,
-        child: Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1A1F36).withOpacity(0.95),
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: Colors.white.withOpacity(0.2), width: 1.5),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 30, offset: const Offset(0, 15)),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.language, color: Colors.white, size: 32),
-              const SizedBox(height: 15),
-              _buildLanguageOption('UZB', 'O\'zbekcha'),
-              const Divider(color: Colors.white24),
-              _buildLanguageOption('ENG', 'English'),
-              const Divider(color: Colors.white24),
-              _buildLanguageOption('RUS', 'Русский'),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLanguageOption(String code, String name) {
-    final lang = Provider.of<LanguageProvider>(context, listen: false);
-    return ListTile(
-      title: Text(name, style: const TextStyle(color: Colors.white)),
-      trailing: lang.currentLanguage == code
-          ? const Icon(Icons.check, color: Color(0xFF4DB6AC))
-          : null,
-      onTap: () {
-        lang.changeLanguage(code);
-        Navigator.pop(context);
-      },
-    );
-  }
+  @override void dispose() { _ac.dispose(); super.dispose(); }
 
   @override
   Widget build(BuildContext context) {
-    final userId = FirebaseAuth.instance.currentUser!.uid;
-
+    final uid = FirebaseAuth.instance.currentUser!.uid;
     return Consumer<LanguageProvider>(
-      builder: (context, lang, child) {
-        return Scaffold(
-          extendBodyBehindAppBar: true,
-          appBar: AppBar(
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            toolbarHeight: 90,
-            title: Row(
-              children: [
-                Hero(
-                  tag: 'clinic_logo',
-                  child: Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
-                    child: const Icon(Icons.local_hospital, size: 32, color: Color(0xFF0A7075)),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('MEDLINE',
-                        style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
-                    Text(lang.translate('doctor_panel'),
-                        style: TextStyle(fontSize: 14, color: Colors.white.withOpacity(0.8))),
-                  ],
-                ),
-              ],
+      builder: (_, lang, __) => Scaffold(
+        backgroundColor: ML.bgPage,
+        body: Column(children: [
+          _header(lang),
+          _tabs(lang),
+          Expanded(child: FadeTransition(opacity: _fade, child: _list(uid, lang))),
+        ]),
+      ),
+    );
+  }
+
+  Widget _header(LanguageProvider lang) {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: ML.headerGrad,
+        borderRadius: BorderRadius.only(bottomLeft: Radius.circular(28), bottomRight: Radius.circular(28)),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 12, 20),
+          child: Row(children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(16)),
+              child: Icon(Icons.medical_services_rounded, color: Colors.white, size: 28),
             ),
-            actions: [
-              const ThemeIconButton(), // Theme toggle
-              IconButton(
-                icon: const Icon(Icons.language, color: Colors.white),
-                onPressed: _showLanguageDialog,
-                tooltip: lang.translate('language'),
-              ),
-              IconButton(
-                icon: const Icon(Icons.logout_rounded, color: Colors.white),
-                tooltip: lang.translate('logout'),
-                onPressed: () async {
-                  await FirebaseAuth.instance.signOut();
-                  if (context.mounted) {
-                    Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const LoginScreen()), (route) => false);
-                  }
-                },
-              ),
-              const SizedBox(width: 8),
-            ],
-          ),
-          body: Stack(
-            children: [
-              // Background
-              Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Color(0xFF0A7075), Color(0xFF083D56), Color(0xFF0A2D4A), Color(0xFF0F1E3C), Color(0xFF0D162F)],
-                  ),
-                ),
-              ),
-              ...List.generate(6, (i) => _floatingParticle(i)),
+            const SizedBox(width: 14),
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('MEDLINE', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 1.2)),
+              Text(lang.translate('doctor_panel'), style: const TextStyle(fontSize: 13, color: Colors.white70)),
+            ]),
+            const Spacer(),
+            _iconBtn(Icons.language, () => _langDialog(lang)),
+            _iconBtn(Icons.logout_rounded, () async {
+              await FirebaseAuth.instance.signOut();
+              if (mounted) Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
+            }),
+          ]),
+        ),
+      ),
+    );
+  }
 
-              SafeArea(
-                child: Column(
-                  children: [
-                    // Tab selector
-                    Container(
-                      margin: const EdgeInsets.all(24),
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: Colors.white.withOpacity(0.1)),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                              child: _buildTabButton(lang.translate('waiting'), Icons.hourglass_empty, 'waiting')),
-                          Expanded(
-                              child: _buildTabButton(lang.translate('completed'), Icons.check_circle, 'completed')),
-                        ],
-                      ),
-                    ),
+  Widget _iconBtn(IconData icon, VoidCallback onTap) => Material(
+    color: Colors.white.withOpacity(0.15),
+    borderRadius: BorderRadius.circular(12),
+    child: InkWell(borderRadius: BorderRadius.circular(12), onTap: onTap,
+      child: Padding(padding: const EdgeInsets.all(10), child: Icon(icon, color: Colors.white, size: 22))),
+  );
 
-                    // Patient list
-                    Expanded(
-                      child: StreamBuilder<QuerySnapshot>(
-                        stream: FirebaseFirestore.instance
-                            .collection('patients')
-                            .where('doctorId', isEqualTo: userId)
-                            .snapshots(),
-                        builder: (context, snapshot) {
-                          if (snapshot.connectionState == ConnectionState.waiting) {
-                            return const Center(child: CircularProgressIndicator(color: Colors.white));
-                          }
+  Widget _tabs(LanguageProvider lang) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      padding: const EdgeInsets.all(5),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16),
+        boxShadow: ML.cardShadow),
+      child: Row(children: [
+        _tabItem(lang.translate('waiting'), Icons.hourglass_top_rounded, 'waiting', ML.waiting, ML.waitingBg),
+        _tabItem(lang.translate('completed'), Icons.check_circle_rounded, 'completed', ML.done, ML.doneBg),
+      ]),
+    );
+  }
 
-                          if (snapshot.hasError) {
-                            return Center(child: Text('${lang.translate('error')}: ${snapshot.error}', style: const TextStyle(color: Colors.white)));
-                          }
+  Widget _tabItem(String lbl, IconData icon, String key, Color c, Color bg) {
+    final sel = _tab == key;
+    return Expanded(child: GestureDetector(
+      onTap: () => setState(() => _tab = key),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        decoration: BoxDecoration(
+          gradient: sel ? (key == 'waiting' ? ML.coralGrad : ML.mintGrad) : null,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(icon, size: 17, color: sel ? Colors.white : Colors.grey.shade400),
+          const SizedBox(width: 6),
+          Text(lbl, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700,
+            color: sel ? Colors.white : Colors.grey.shade400)),
+        ]),
+      ),
+    ));
+  }
 
-                          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                            return _buildEmptyState(lang);
-                          }
-
-                          final allPatients = snapshot.data!.docs;
-                          var filteredPatients = allPatients.where((doc) {
-                            final data = doc.data() as Map<String, dynamic>;
-                            final status = data['status'] ?? 'waiting';
-                            return status == _selectedTab;
-                          }).toList();
-
-                          filteredPatients.sort((a, b) {
-                            final aData = a.data() as Map<String, dynamic>;
-                            final bData = b.data() as Map<String, dynamic>;
-                            final aTime = aData['createdAt'] as Timestamp?;
-                            final bTime = bData['createdAt'] as Timestamp?;
-                            if (aTime == null && bTime == null) return 0;
-                            if (aTime == null) return 1;
-                            if (bTime == null) return -1;
-                            return bTime.compareTo(aTime);
-                          });
-
-                          if (filteredPatients.isEmpty) {
-                            return _buildEmptyState(lang);
-                          }
-
-                          return ListView.builder(
-                            padding: const EdgeInsets.symmetric(horizontal: 24),
-                            itemCount: filteredPatients.length,
-                            itemBuilder: (context, index) {
-                              final patient = filteredPatients[index];
-                              final data = patient.data() as Map<String, dynamic>;
-                              return _buildPatientCard(context, patient.id, data, lang);
-                            },
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+  Widget _list(String uid, LanguageProvider lang) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('patients').where('doctorId', isEqualTo: uid).snapshots(),
+      builder: (_, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator(color: ML.primary));
+        }
+        final docs = snap.data?.docs ?? [];
+        final filtered = docs.where((d) => (d.data() as Map)['status'] == _tab).toList()
+          ..sort((a, b) {
+            final at = ((a.data() as Map)['createdAt'] as Timestamp?);
+            final bt = ((b.data() as Map)['createdAt'] as Timestamp?);
+            if (at == null && bt == null) return 0;
+            if (at == null) return 1; if (bt == null) return -1;
+            return bt.compareTo(at);
+          });
+        if (filtered.isEmpty) return _empty(lang);
+        return ListView.builder(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+          itemCount: filtered.length,
+          itemBuilder: (_, i) => _card(filtered[i].id, filtered[i].data() as Map<String, dynamic>, lang),
         );
       },
     );
   }
 
-  Widget _buildTabButton(String title, IconData icon, String tab) {
-    final isSelected = _selectedTab == tab;
-    return GestureDetector(
-      onTap: () => setState(() => _selectedTab = tab),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        padding: const EdgeInsets.symmetric(vertical: 14),
+  Widget _empty(LanguageProvider lang) {
+    final isW = _tab == 'waiting';
+    return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+      Container(
+        padding: const EdgeInsets.all(32),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF4DB6AC) : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          gradient: isSelected ? const LinearGradient(colors: [Color(0xFF0A7075), Color(0xFF14B8A6)]) : null,
-          boxShadow: isSelected ? [BoxShadow(color: const Color(0xFF0A7075).withOpacity(0.4), blurRadius: 10)] : null,
+          gradient: isW ? ML.coralGrad : ML.mintGrad,
+          shape: BoxShape.circle,
+          boxShadow: [BoxShadow(color: (isW ? ML.waiting : ML.done).withOpacity(0.3), blurRadius: 24, offset: const Offset(0, 8))],
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: isSelected ? Colors.white : Colors.white60, size: 20),
-            const SizedBox(width: 8),
-            Text(
-              title,
-              style: TextStyle(
-                color: isSelected ? Colors.white : Colors.white60,
-                fontWeight: FontWeight.bold,
-                fontSize: 15,
-              ),
-            ),
-          ],
-        ),
+        child: Icon(isW ? Icons.inbox_rounded : Icons.task_alt_rounded, size: 52, color: Colors.white),
       ),
-    );
+      const SizedBox(height: 20),
+      Text(isW ? (lang.translate('no_waiting_patients')) : (lang.translate('no_patients')),
+        style: const TextStyle(fontSize: 16, color: Color(0xFF5E8DB8), fontWeight: FontWeight.w600)),
+    ]));
   }
 
-  Widget _buildEmptyState(LanguageProvider lang) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(32),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.05),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              _selectedTab == 'waiting' ? Icons.inbox : Icons.check_circle_outline,
-              size: 64, color: Colors.white30,
-            ),
-          ),
-          const SizedBox(height: 24),
-          Text(
-            _selectedTab == 'waiting' ? lang.translate('no_waiting_patients') : lang.translate('no_patients'),
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: Colors.white.withOpacity(0.7)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPatientCard(BuildContext context, String patientId, Map<String, dynamic> data, LanguageProvider lang) {
-    final isCompleted = data['status'] == 'completed';
-    final patientName = data['fullName'] ?? '${data['name'] ?? ''} ${data['surname'] ?? ''}'.trim();
-    final isPaid = data['isPaid'] ?? false;
-    final price = data['price'] ?? 0.0;
+  Widget _card(String id, Map<String, dynamic> d, LanguageProvider lang) {
+    final done = d['status'] == 'completed';
+    final name  = d['fullName'] ?? '${d['name'] ?? ''} ${d['surname'] ?? ''}'.trim();
+    final paid  = d['isPaid'] ?? false;
+    final price = (d['price'] ?? 0.0) as num;
+    final queue = d['queue'];
+    final init  = name.isNotEmpty ? name[0].toUpperCase() : 'B';
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
+      margin: const EdgeInsets.only(bottom: 14),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white.withOpacity(0.1)),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 4))],
+        color: ML.bgCard,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: ML.cardShadow,
+        border: Border.all(color: done ? ML.done.withOpacity(0.2) : ML.waiting.withOpacity(0.2), width: 1.5),
       ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(24),
-          onTap: isCompleted ? null : () => _showDiagnosisDialog(context, patientId, patientName, data, lang),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: isCompleted ? Colors.green.withOpacity(0.2) : Colors.orange.withOpacity(0.2),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Text(
-                        patientName.isNotEmpty ? patientName[0].toUpperCase() : 'B',
-                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: isCompleted ? Colors.greenAccent : Colors.orangeAccent),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            patientName.isNotEmpty ? patientName : 'Bemor',
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
-                          ),
-                          const SizedBox(height: 4),
-                          Row(
-                            children: [
-                              Icon(isCompleted ? Icons.check_circle : Icons.pending, size: 14, color: isCompleted ? Colors.greenAccent : Colors.orangeAccent),
-                              const SizedBox(width: 6),
-                              Text(
-                                isCompleted ? lang.translate('completed') : lang.translate('waiting'),
-                                style: TextStyle(fontSize: 13, color: isCompleted ? Colors.greenAccent : Colors.orangeAccent, fontWeight: FontWeight.w500),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (data['queue'] != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(20)),
-                        child: Text('${data['queue']}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-                      ),
-                  ],
+      child: Material(color: Colors.transparent, child: InkWell(
+        borderRadius: BorderRadius.circular(22),
+        onTap: done ? null : () => _diagDialog(id, name, d, lang),
+        child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            // Avatar
+            Container(width: 52, height: 52,
+              decoration: BoxDecoration(
+                gradient: done ? ML.mintGrad : ML.headerGrad,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [BoxShadow(color: (done ? ML.done : ML.primary).withOpacity(0.3), blurRadius: 10, offset: const Offset(0,4))],
+              ),
+              child: Center(child: Text(init, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)))),
+            const SizedBox(width: 14),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(name.isNotEmpty ? name : 'Bemor', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF023E8A))),
+              const SizedBox(height: 6),
+              ML.badge(
+                done ? lang.translate('completed') : lang.translate('waiting'),
+                done ? Icons.check_circle_rounded : Icons.access_time_rounded,
+                done ? ML.done : ML.waiting,
+                done ? ML.doneBg : ML.waitingBg,
+              ),
+            ])),
+            if (queue != null) Container(
+              padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
+              decoration: BoxDecoration(gradient: ML.headerGrad, borderRadius: BorderRadius.circular(20),
+                boxShadow: ML.shadow(color: ML.primary, blur: 10, dy: 3)),
+              child: Text('№$queue', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14))),
+            const SizedBox(width: 8),
+            // Tarix tugmasi
+            Material(
+              color: ML.accent.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(12),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => Navigator.push(context, MaterialPageRoute(
+                  builder: (_) => PatientHistoryScreen(
+                    patientId: id,
+                    patientName: name,
+                    patientData: d,
+                  ),
+                )),
+                child: const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: Icon(Icons.history_rounded, color: ML.accent, size: 22),
                 ),
-                const SizedBox(height: 16),
-                Divider(color: Colors.white.withOpacity(0.1), height: 1),
-                const SizedBox(height: 16),
-                if (data['address'] != null) ...[
-                  _buildInfoRow(Icons.location_on, lang.translate('address'), data['address']),
-                  const SizedBox(height: 8),
-                ],
-                _buildInfoRow(Icons.healing, lang.translate('issue'), data['issue'] ?? lang.translate('no_patients')),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Icon(isPaid ? Icons.check_circle : Icons.pending, size: 16, color: isPaid ? Colors.greenAccent : Colors.orangeAccent),
-                    const SizedBox(width: 8),
-                    Text(isPaid ? lang.translate('paid') : lang.translate('unpaid'), style: TextStyle(fontSize: 13, color: isPaid ? Colors.greenAccent : Colors.orangeAccent)),
-                  ],
-                ),
-                if (isCompleted && data['diagnosis'] != null) ...[
-                  const SizedBox(height: 16),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.green.withOpacity(0.3))),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('Diagnosis:', style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 4),
-                        Text(data['diagnosis'], style: const TextStyle(color: Colors.white)),
-                      ],
-                    ),
-                  ),
-                ],
-                if (!isCompleted) ...[
-                  const SizedBox(height: 20),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: () => _showDiagnosisDialog(context, patientId, patientName, data, lang),
-                      icon: const Icon(Icons.edit_note, size: 20, color: Colors.white),
-                      label: Text(lang.translate('add_diagnosis'), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF0A7075),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildInfoRow(IconData icon, String label, String value) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 16, color: Colors.white60),
-        const SizedBox(width: 8),
-        Text('$label: ', style: const TextStyle(fontSize: 13, color: Colors.white60)),
-        Expanded(child: Text(value, style: const TextStyle(fontSize: 13, color: Colors.white))),
-      ],
-    );
-  }
-
-  void _showDiagnosisDialog(BuildContext context, String patientId, String patientName, Map<String, dynamic> patientData, LanguageProvider lang) {
-    final controller = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-
-    showDialog(
-      context: context,
-      builder: (ctx) => Dialog(
-        backgroundColor: Colors.transparent,
-        child: Container(
-          decoration: BoxDecoration(
-            color: const Color(0xFF1A1F36).withOpacity(0.95),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: Colors.white.withOpacity(0.2)),
-          ),
-          padding: const EdgeInsets.all(24),
-          child: SingleChildScrollView(
-            child: Form(
-              key: formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(lang.translate('add_diagnosis'), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
-                  const SizedBox(height: 4),
-                  Text(patientName, style: TextStyle(fontSize: 14, color: Colors.white.withOpacity(0.7))),
-                  const SizedBox(height: 24),
-                  TextFormField(
-                    controller: controller,
-                    decoration: InputDecoration(
-                      labelText: '${lang.translate('diagnosis')} *',
-                      labelStyle: const TextStyle(color: Colors.white70),
-                      hintText: lang.translate('enter_diagnosis'),
-                      hintStyle: const TextStyle(color: Colors.white30),
-                      filled: true,
-                      fillColor: Colors.white.withOpacity(0.05),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
-                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: Color(0xFF4DB6AC), width: 1.5)),
-                    ),
-                    style: const TextStyle(color: Colors.white),
-                    maxLines: 4,
-                    validator: (v) => v == null || v.trim().isEmpty ? lang.translate('enter_diagnosis') : null,
-                  ),
-                  const SizedBox(height: 24),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          style: OutlinedButton.styleFrom(
-                            side: BorderSide(color: Colors.white.withOpacity(0.5)),
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                          child: Text(lang.translate('cancel'), style: const TextStyle(color: Colors.white)),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: () async {
-                            if (!formKey.currentState!.validate()) return;
-                            try {
-                              await FirebaseFirestore.instance.collection('patients').doc(patientId).update({
-                                'diagnosis': controller.text.trim(),
-                                'status': 'completed',
-                                'diagnosedAt': FieldValue.serverTimestamp(),
-                              });
-                              if (ctx.mounted) {
-                                Navigator.pop(ctx);
-                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(lang.translate('diagnosis_saved')), backgroundColor: Colors.green));
-                              }
-                            } catch (e) {
-                              if (ctx.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${lang.translate('error')}: $e'), backgroundColor: Colors.red));
-                              }
-                            }
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF0A7075),
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                          child: Text(lang.translate('save'), style: const TextStyle(color: Colors.white)),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
               ),
             ),
+          ]),
+
+          if (d['issue'] != null || d['address'] != null) ...[
+            const SizedBox(height: 12),
+            Container(height: 1, decoration: const BoxDecoration(gradient: LinearGradient(colors: [Color(0xFFD0E8FF), Colors.transparent]))),
+            const SizedBox(height: 10),
+            if (d['issue'] != null) _infoRow(Icons.healing_rounded, lang.translate('issue'), d['issue'], ML.coral),
+            if (d['address'] != null) ...[const SizedBox(height: 5), _infoRow(Icons.location_on_rounded, lang.translate('address'), d['address'], ML.accent)],
+          ],
+
+          const SizedBox(height: 12),
+          // Payment row
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: paid ? ML.paidBg : ML.unpaidBg,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: paid ? ML.paid.withOpacity(0.3) : ML.unpaid.withOpacity(0.3)),
+            ),
+            child: Row(children: [
+              Icon(paid ? Icons.verified_rounded : Icons.pending_rounded, size: 17, color: paid ? ML.paid : ML.unpaid),
+              const SizedBox(width: 7),
+              Text(paid ? lang.translate('paid') : lang.translate('unpaid'),
+                style: TextStyle(fontWeight: FontWeight.w700, color: paid ? ML.paid : ML.unpaid, fontSize: 13)),
+              const Spacer(),
+              Text('${NumberFormat('#,###', 'uz_UZ').format(price.toDouble())} so\'m',
+                style: const TextStyle(fontWeight: FontWeight.w800, color: ML.primary, fontSize: 14)),
+            ]),
           ),
-        ),
-      ),
+
+          if (done && d['diagnosis'] != null) ...[
+            const SizedBox(height: 12),
+            Container(padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(gradient: const LinearGradient(colors: [Color(0xFFE8FBF5), Color(0xFFF0FFF8)]),
+                borderRadius: BorderRadius.circular(14), border: Border.all(color: ML.done.withOpacity(0.3))),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: ML.done.withOpacity(0.2), borderRadius: BorderRadius.circular(6)),
+                    child: const Icon(Icons.notes_rounded, size: 14, color: ML.done)),
+                  const SizedBox(width: 8),
+                  const Text('Diagnoz', style: TextStyle(color: ML.done, fontWeight: FontWeight.w700, fontSize: 13)),
+                ]),
+                const SizedBox(height: 8),
+                Text(d['diagnosis'], style: const TextStyle(color: Color(0xFF1B5E20), fontSize: 14, height: 1.4)),
+              ]),
+            ),
+          ],
+
+          if (!done) ...[
+            const SizedBox(height: 14),
+            SizedBox(width: double.infinity, child: ElevatedButton.icon(
+              onPressed: () => _diagDialog(id, name, d, lang),
+              icon: const Icon(Icons.edit_note_rounded, size: 20),
+              label: Text(lang.translate('add_diagnosis'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: ML.primary, foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 13),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), elevation: 0,
+              ),
+            )),
+          ],
+        ])),
+      )),
     );
   }
 
-  @override
-  void dispose() {
-    _animationController.dispose();
-    super.dispose();
+  Widget _infoRow(IconData icon, String label, String val, Color c) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Icon(icon, size: 15, color: c), const SizedBox(width: 6),
+      Text('$label: ', style: const TextStyle(fontSize: 13, color: Color(0xFF5E8DB8), fontWeight: FontWeight.w600)),
+      Expanded(child: Text(val, style: const TextStyle(fontSize: 13, color: Color(0xFF023E8A)))),
+    ],
+  );
+
+  void _langDialog(LanguageProvider lang) {
+    showDialog(context: context, builder: (_) => AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      title: const Row(children: [Icon(Icons.language, color: ML.primary), SizedBox(width: 8), Text('Til', style: TextStyle(color: ML.primary, fontWeight: FontWeight.w800))]),
+      content: Column(mainAxisSize: MainAxisSize.min, children: [
+        _langTile('UZB', 'O\'zbekcha', lang),
+        _langTile('ENG', 'English', lang),
+        _langTile('RUS', 'Русский', lang),
+      ]),
+    ));
+  }
+
+  Widget _langTile(String code, String name, LanguageProvider lang) {
+    final sel = lang.currentLanguage == code;
+    return ListTile(
+      title: Text(name, style: TextStyle(fontWeight: sel ? FontWeight.bold : FontWeight.normal, color: sel ? ML.primary : Colors.black87)),
+      trailing: sel ? const Icon(Icons.check_circle_rounded, color: ML.primary) : null,
+      onTap: () { lang.changeLanguage(code); Navigator.pop(context); },
+    );
+  }
+
+  void _diagDialog(String id, String name, Map<String, dynamic> d, LanguageProvider lang) {
+    final ctrl = TextEditingController();
+    final fk = GlobalKey<FormState>();
+    showDialog(context: context, builder: (dCtx) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+      child: Container(
+        decoration: BoxDecoration(borderRadius: BorderRadius.circular(28)),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // Dialog header
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: const BoxDecoration(gradient: ML.headerGrad, borderRadius: BorderRadius.only(topLeft: Radius.circular(28), topRight: Radius.circular(28))),
+            child: Row(children: [
+              Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(12)),
+                child: const Icon(Icons.edit_note_rounded, color: Colors.white, size: 24)),
+              const SizedBox(width: 12),
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(lang.translate('add_diagnosis'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Colors.white)),
+                Text(name, style: const TextStyle(fontSize: 12, color: Colors.white70)),
+              ]),
+            ]),
+          ),
+          Padding(padding: const EdgeInsets.all(20), child: Form(key: fk, child: Column(children: [
+            TextFormField(
+              controller: ctrl, maxLines: 4,
+              decoration: ML.inputDec(lang.translate('diagnosis'), Icons.notes_rounded, hint: lang.translate('enter_diagnosis')),
+              validator: (v) => (v == null || v.trim().isEmpty) ? lang.translate('enter_diagnosis') : null,
+            ),
+            const SizedBox(height: 16),
+            Row(children: [
+              Expanded(child: OutlinedButton(
+                onPressed: () => Navigator.pop(dCtx),
+                style: OutlinedButton.styleFrom(foregroundColor: Colors.grey, side: const BorderSide(color: Color(0xFFD0D0D0)), padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+                child: Text(lang.translate('cancel')),
+              )),
+              const SizedBox(width: 12),
+              Expanded(child: ElevatedButton(
+                onPressed: () async {
+                  if (!fk.currentState!.validate()) return;
+                  try {
+                    await FirebaseFirestore.instance.collection('patients').doc(id).update({
+                      'diagnosis': ctrl.text.trim(), 'status': 'completed', 'diagnosedAt': FieldValue.serverTimestamp(),
+                    });
+                    // Tashrifni tarixga saqlash
+                    await FirebaseFirestore.instance
+                        .collection('patients').doc(id)
+                        .collection('visits').add({
+                      'type': 'visit',
+                      'date': FieldValue.serverTimestamp(),
+                      'diagnosis': ctrl.text.trim(),
+                      'issue': d['issue'],
+                      'doctorId': d['doctorId'],
+                      'price': d['price'],
+                      'isPaid': d['isPaid'],
+                    });
+                    if (dCtx.mounted) Navigator.pop(dCtx);
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      content: Text(lang.translate('diagnosis_saved')), backgroundColor: ML.done,
+                      behavior: SnackBarBehavior.floating, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ));
+                  } catch (e) {
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Xato: $e'), backgroundColor: ML.coral));
+                  }
+                },
+                style: ElevatedButton.styleFrom(backgroundColor: ML.primary, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), elevation: 0),
+                child: Text(lang.translate('save'), style: const TextStyle(fontWeight: FontWeight.w700)),
+              )),
+            ]),
+          ]))),
+        ]),
+      ),
+    ));
   }
 }

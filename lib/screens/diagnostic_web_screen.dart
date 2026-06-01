@@ -186,9 +186,9 @@ class _DiagnosticWebScreenState extends State<DiagnosticWebScreen> with TickerPr
           Container(
              decoration: const BoxDecoration(
                 gradient: LinearGradient(
-                   begin: Alignment.topCenter,
-                   end: Alignment.bottomCenter,
-                   colors: [Color(0xFF0A7075), Color(0xFF083D56), Color(0xFF0A2D4A)],
+                   begin: Alignment.topLeft,
+                   end: Alignment.bottomRight,
+                   colors: [Color(0xFF023E8A), Color(0xFF0077B6), Color(0xFF00B4D8)],
                 ),
              ),
           ),

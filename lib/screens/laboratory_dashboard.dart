@@ -1,758 +1,416 @@
-// lib/screens/laboratory_dashboard.dart
-import 'dart:math';
-import 'package:flutter/material.dart';
+// lib/screens/laboratory_dashboard.dart — YANGI DIZAYN
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
-import 'package:intl/intl.dart';
 import '../providers/language_provider.dart';
-import '../providers/theme_provider.dart';
-import '../widgets/theme_toggle.dart';
+import '../theme/medline_theme.dart';
 import 'login_screen.dart';
+
+// Keep for auth_wrapper compatibility
+class HospitalizationDashboard {}
 
 class LaboratoryDashboard extends StatefulWidget {
   const LaboratoryDashboard({super.key});
-
   @override
   State<LaboratoryDashboard> createState() => _LaboratoryDashboardState();
 }
 
-class _LaboratoryDashboardState extends State<LaboratoryDashboard> with TickerProviderStateMixin {
-  String _selectedTab = 'all'; // all, pending, completed
-  final TextEditingController _searchController = TextEditingController();
-  String _searchQuery = '';
-  
-  late AnimationController _animationController;
-  late Animation<double> _fadeAnimation;
+class _LaboratoryDashboardState extends State<LaboratoryDashboard> with SingleTickerProviderStateMixin {
+  String _tab = 'all';
+  final _searchCtrl = TextEditingController();
+  String _search = '';
+  late AnimationController _animCtrl;
+  late Animation<double> _fadeAnim;
+
+  static const Color primary  = Color(0xFF7B2FBE); // Purple — lab
+  static const Color accent   = Color(0xFF00B4D8);
+  static const Color bgPage   = Color(0xFFF5F0FF);
+  static const Color doneClr  = Color(0xFF06D6A0);
+  static const Color doneBg   = Color(0xFFE8FBF5);
+  static const Color pendClr  = Color(0xFFFF6B35);
+  static const Color pendBg   = Color(0xFFFFF0EA);
 
   @override
   void initState() {
     super.initState();
-    _animationController = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1500));
-    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeOutCubic),
-    );
-    _animationController.forward();
+    _animCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
+    _fadeAnim = CurvedAnimation(parent: _animCtrl, curve: Curves.easeOut);
+    _animCtrl.forward();
+    _searchCtrl.addListener(() => setState(() => _search = _searchCtrl.text));
   }
-
   @override
-  void dispose() {
-    _searchController.dispose();
-    _animationController.dispose();
-    super.dispose();
-  }
+  void dispose() { _animCtrl.dispose(); _searchCtrl.dispose(); super.dispose(); }
 
-  // --- ANIMATIONS ---
-  Widget _floatingParticle(int index) {
-    final random = Random(index);
-    final size = random.nextDouble() * 100 + 50;
-    final duration = 20 + random.nextInt(15);
-    return AnimatedPositioned(
-      duration: Duration(seconds: duration),
-      curve: Curves.easeInOutSine,
-      top: -size,
-      left: (random.nextDouble() * 100).clamp(0.0, 95.0) * (MediaQuery.of(context).size.width / 100),
+  InputDecoration _deco(String label, IconData icon) => InputDecoration(
+    labelText: label, prefixIcon: Icon(icon, color: primary, size: 20),
+    filled: true, fillColor: const Color(0xFFF3E5F5),
+    border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFFCE93D8))),
+    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: primary, width: 1.8)),
+    contentPadding: const EdgeInsets.symmetric(vertical: 15, horizontal: 16),
+  );
+
+  // ── Test Types Dialog ──
+  void _testTypesDialog() {
+    showDialog(context: context, builder: (ctx) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: RadialGradient(
-            colors: [Colors.white.withOpacity(0.08), Colors.transparent],
-          ),
-          boxShadow: [
-            BoxShadow(color: Colors.white.withOpacity(0.06), blurRadius: 40, spreadRadius: 10),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // --- DIALOGS (Refactored to Modern UI) ---
-
-  void _showTestTypesDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (ctx) => Dialog(
-        backgroundColor: Colors.transparent,
-        child: Container(
-          constraints: const BoxConstraints(maxHeight: 600),
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1A1F36).withOpacity(0.95),
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: Colors.white.withOpacity(0.2)),
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 20)],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-                    child: const Icon(Icons.category, color: Color(0xFF4DB6AC), size: 24),
-                  ),
-                  const SizedBox(width: 16),
-                  const Text('Test Turlari', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
-                  const Spacer(),
-                  IconButton(icon: const Icon(Icons.close, color: Colors.white54), onPressed: () => Navigator.pop(ctx)),
-                ],
-              ),
-              const SizedBox(height: 24),
-              Expanded(
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance.collection('test_types').orderBy('name').snapshots(),
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Colors.white));
-                    if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                      return Center(child: Text('Test turlari yo\'q', style: TextStyle(color: Colors.white.withOpacity(0.5))));
-                    }
-                    final testTypes = snapshot.data!.docs;
-                    return ListView.builder(
-                      itemCount: testTypes.length,
-                      itemBuilder: (context, index) {
-                        final testType = testTypes[index];
-                        final data = testType.data() as Map<String, dynamic>;
-                        return Container(
-                          margin: const EdgeInsets.only(bottom: 12),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.05),
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: Colors.white.withOpacity(0.1)),
-                          ),
-                          child: ListTile(
-                            leading: Icon(Icons.biotech, color: Colors.white.withOpacity(0.7)),
-                            title: Text(data['name'] ?? '', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                            subtitle: Text('${data['price'] ?? 0} so\'m', style: TextStyle(color: Colors.white.withOpacity(0.6))),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.delete, color: Colors.redAccent),
-                              onPressed: () async {
-                                await FirebaseFirestore.instance.collection('test_types').doc(testType.id).delete();
-                              },
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: () => _showAddTestTypeDialog(context),
-                  icon: const Icon(Icons.add, color: Colors.white),
-                  label: const Text('Yangi Test Turi', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF0A7075),
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showAddTestTypeDialog(BuildContext context) {
-    final nameController = TextEditingController();
-    final priceController = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-
-    showDialog(
-      context: context,
-      builder: (ctx) => Dialog(
-        backgroundColor: Colors.transparent,
-        child: Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1A1F36).withOpacity(0.95),
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: Colors.white.withOpacity(0.2)),
-          ),
-          child: Form(
-            key: formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Yangi Test Turi', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
-                const SizedBox(height: 24),
-                _glassField(controller: nameController, label: 'Test turi nomi', icon: Icons.biotech),
-                const SizedBox(height: 16),
-                _glassField(controller: priceController, label: 'Narx (so\'m)', icon: Icons.attach_money, isNumber: true),
-                const SizedBox(height: 24),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.white.withOpacity(0.5)), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                        child: const Text('Bekor qilish', style: TextStyle(color: Colors.white)),
-                      ),
+        constraints: const BoxConstraints(maxHeight: 560),
+        padding: const EdgeInsets.all(24),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Row(children: [
+            Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: const Color(0xFFF3E5F5), borderRadius: BorderRadius.circular(12)),
+              child: const Icon(Icons.category_rounded, color: primary, size: 24)),
+            const SizedBox(width: 12),
+            const Expanded(child: Text('Test turlari', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF4A148C)))),
+            IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+          ]),
+          const SizedBox(height: 16),
+          Expanded(child: StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance.collection('test_types').orderBy('name').snapshots(),
+            builder: (ctx, snap) {
+              if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: primary));
+              if (snap.data!.docs.isEmpty) return const Center(child: Text('Test turlari yo\'q', style: TextStyle(color: Colors.black45)));
+              return ListView.builder(
+                itemCount: snap.data!.docs.length,
+                itemBuilder: (_, i) {
+                  final d = snap.data!.docs[i].data() as Map<String, dynamic>;
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    decoration: BoxDecoration(color: const Color(0xFFF8F0FF), borderRadius: BorderRadius.circular(14), border: Border.all(color: const Color(0xFFCE93D8))),
+                    child: ListTile(
+                      leading: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: const Color(0xFFE1BEE7), borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.biotech_rounded, color: primary, size: 20)),
+                      title: Text(d['name'] ?? '', style: const TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF4A148C))),
+                      subtitle: Text('${NumberFormat('#,###', 'uz_UZ').format((d['price'] as num? ?? 0).toDouble())} so\'m', style: const TextStyle(color: primary, fontWeight: FontWeight.bold)),
+                      trailing: IconButton(icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 20), onPressed: () async { await FirebaseFirestore.instance.collection('test_types').doc(snap.data!.docs[i].id).delete(); }),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: () async {
-                          if (formKey.currentState!.validate()) {
-                            await FirebaseFirestore.instance.collection('test_types').add({
-                              'name': nameController.text.trim(),
-                              'price': double.parse(priceController.text.trim()),
-                              'createdAt': FieldValue.serverTimestamp(),
-                            });
-                            if (ctx.mounted) Navigator.pop(ctx);
-                          }
-                        },
-                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0A7075), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                        child: const Text('Saqlash', style: TextStyle(color: Colors.white)),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
+                  );
+                },
+              );
+            },
+          )),
+          const Divider(),
+          _addTestTypeRow(ctx),
+        ]),
       ),
-    );
+    ));
   }
 
-  void _showAddTestDialog(BuildContext context) {
-    final nameController = TextEditingController();
-    final priceController = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-    String? selectedTestTypeId;
-    String? selectedTestTypeName;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          return Dialog(
-            backgroundColor: Colors.transparent,
-            child: Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1A1F36).withOpacity(0.95),
-                borderRadius: BorderRadius.circular(28),
-                border: Border.all(color: Colors.white.withOpacity(0.2)),
-              ),
-              child: SingleChildScrollView(
-                child: Form(
-                  key: formKey,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Yangi Test Qo\'shish', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
-                      const SizedBox(height: 24),
-                      _glassField(controller: nameController, label: 'Bemor ismi', icon: Icons.person),
-                      const SizedBox(height: 16),
-                      // Dropdown for Test Type
-                      StreamBuilder<QuerySnapshot>(
-                        stream: FirebaseFirestore.instance.collection('test_types').orderBy('name').snapshots(),
-                        builder: (context, snapshot) {
-                          if (!snapshot.hasData) return const CircularProgressIndicator();
-                          final testTypes = snapshot.data!.docs;
-                          
-                          if (testTypes.isEmpty) return const Text('Test turlari yo\'q', style: TextStyle(color: Colors.white));
-
-                          return Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.05),
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: Colors.white.withOpacity(0.1)),
-                            ),
-                            child: DropdownButtonHideUnderline(
-                              child: DropdownButton<String>(
-                                isExpanded: true,
-                                dropdownColor: const Color(0xFF1A1F36),
-                                value: selectedTestTypeId,
-                                hint: const Text('Test turini tanlang', style: TextStyle(color: Colors.white54)),
-                                style: const TextStyle(color: Colors.white),
-                                items: testTypes.map((doc) {
-                                  final data = doc.data() as Map<String, dynamic>;
-                                  return DropdownMenuItem<String>(
-                                    value: doc.id,
-                                    child: Text('${data['name']} - ${data['price']} so\'m'),
-                                  );
-                                }).toList(),
-                                onChanged: (value) {
-                                  setDialogState(() {
-                                    selectedTestTypeId = value;
-                                    final selectedDoc = testTypes.firstWhere((doc) => doc.id == value);
-                                    final data = selectedDoc.data() as Map<String, dynamic>;
-                                    selectedTestTypeName = data['name'];
-                                    priceController.text = data['price'].toString();
-                                  });
-                                },
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                      _glassField(controller: priceController, label: 'Narx (so\'m)', icon: Icons.attach_money, isNumber: true, readOnly: true),
-                      const SizedBox(height: 24),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: () => Navigator.pop(ctx),
-                              style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.white.withOpacity(0.5)), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                              child: const Text('Bekor qilish', style: TextStyle(color: Colors.white)),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: () async {
-                                if (formKey.currentState!.validate() && selectedTestTypeId != null) {
-                                  await FirebaseFirestore.instance.collection('laboratory_tests').add({
-                                    'patientName': nameController.text.trim(),
-                                    'testType': selectedTestTypeName,
-                                    'testTypeId': selectedTestTypeId,
-                                    'price': double.parse(priceController.text.trim()),
-                                    'status': 'pending',
-                                    'isPaid': false,
-                                    'result': null,
-                                    'createdAt': FieldValue.serverTimestamp(),
-                                    'createdBy': FirebaseAuth.instance.currentUser?.uid,
-                                  });
-                                  if (ctx.mounted) Navigator.pop(ctx);
-                                }
-                              },
-                              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0A7075), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                              child: const Text('Saqlash', style: TextStyle(color: Colors.white)),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          );
+  Widget _addTestTypeRow(BuildContext dialogCtx) {
+    final nCtrl = TextEditingController();
+    final pCtrl = TextEditingController();
+    return Row(children: [
+      Expanded(child: TextField(controller: nCtrl, style: const TextStyle(fontSize: 14), decoration: _deco('Test nomi', Icons.science_rounded).copyWith(contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14)))),
+      const SizedBox(width: 8),
+      SizedBox(width: 90, child: TextField(controller: pCtrl, keyboardType: TextInputType.number, style: const TextStyle(fontSize: 14), decoration: _deco('Narx', Icons.payments_rounded).copyWith(contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14)))),
+      const SizedBox(width: 8),
+      ElevatedButton(
+        style: ElevatedButton.styleFrom(backgroundColor: primary, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12), elevation: 0),
+        onPressed: () async {
+          if (nCtrl.text.isEmpty) return;
+          await FirebaseFirestore.instance.collection('test_types').add({'name': nCtrl.text.trim(), 'price': double.tryParse(pCtrl.text) ?? 0, 'createdAt': FieldValue.serverTimestamp()});
+          nCtrl.clear(); pCtrl.clear();
         },
+        child: const Icon(Icons.add_rounded, size: 22),
       ),
-    );
+    ]);
   }
 
-  void _showResultDialog(BuildContext context, String testId, Map<String, dynamic> testData) {
-    final resultController = TextEditingController(text: testData['result']);
-    final formKey = GlobalKey<FormState>();
-
-    showDialog(
-      context: context,
-      builder: (ctx) => Dialog(
-        backgroundColor: Colors.transparent,
-        child: Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1A1F36).withOpacity(0.95),
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: Colors.white.withOpacity(0.2)),
-          ),
-          child: SingleChildScrollView(
-            child: Form(
-              key: formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                   const Text('Test Natijasi', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
-                   const SizedBox(height: 24),
-                   Container(
-                     padding: const EdgeInsets.all(16),
-                     decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(16)),
-                     child: Column(
-                       children: [
-                         _buildInfoRow(Icons.person, 'Bemor', testData['patientName'] ?? ''),
-                         const SizedBox(height: 8),
-                         _buildInfoRow(Icons.biotech, 'Test', testData['testType'] ?? ''),
-                       ],
-                     ),
-                   ),
-                   const SizedBox(height: 24),
-                   TextFormField(
-                     controller: resultController,
-                     decoration: InputDecoration(
-                       labelText: 'Natija',
-                       filled: true,
-                       fillColor: Colors.white.withOpacity(0.05),
-                       labelStyle: const TextStyle(color: Colors.white70),
-                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-                     ),
-                     style: const TextStyle(color: Colors.white),
-                     maxLines: 4,
-                   ),
-                   const SizedBox(height: 24),
-                   Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.white.withOpacity(0.5)), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                          child: const Text('Bekor qilish', style: TextStyle(color: Colors.white)),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: () async {
-                              await FirebaseFirestore.instance.collection('laboratory_tests').doc(testId).update({
-                                'result': resultController.text.trim(),
-                                'status': 'completed',
-                                'completedAt': FieldValue.serverTimestamp(),
-                              });
-                              if (ctx.mounted) Navigator.pop(ctx);
-                          },
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.green, padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                          child: const Text('Saqlash', style: TextStyle(color: Colors.white)),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
+  // ── Add Test Dialog ──
+  void _addTestDialog() {
+    final nameCtrl = TextEditingController();
+    final priceCtrl = TextEditingController();
+    String? testTypeId, testTypeName;
+    final fk = GlobalKey<FormState>();
+    showDialog(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setSt) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: Padding(padding: const EdgeInsets.all(24), child: Form(key: fk, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: const Color(0xFFF3E5F5), borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.add_circle_outline_rounded, color: primary, size: 26)),
+          const SizedBox(width: 12),
+          const Text('Yangi test', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF4A148C))),
+        ]),
+        const SizedBox(height: 20),
+        TextFormField(
+          controller: nameCtrl, style: const TextStyle(fontSize: 15),
+          decoration: _deco('Bemor ismi', Icons.person_rounded),
+          validator: (v) => v == null || v.trim().isEmpty ? 'Majburiy' : null,
         ),
-      ),
-    );
+        const SizedBox(height: 12),
+        StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance.collection('test_types').orderBy('name').snapshots(),
+          builder: (ctx, snap) {
+            if (!snap.hasData) return const CircularProgressIndicator(color: primary);
+            return DropdownButtonFormField<String>(
+              value: testTypeId,
+              decoration: _deco('Test turini tanlang', Icons.biotech_rounded),
+              items: snap.data!.docs.map((d) {
+                final dd = d.data() as Map<String, dynamic>;
+                return DropdownMenuItem(value: d.id, child: Text('${dd['name']} - ${NumberFormat('#,###', 'uz_UZ').format((dd['price'] as num? ?? 0).toDouble())} so\'m'));
+              }).toList(),
+              onChanged: (v) {
+                setSt(() { testTypeId = v; final doc = snap.data!.docs.firstWhere((d) => d.id == v); final dd = doc.data() as Map<String, dynamic>; testTypeName = dd['name']; priceCtrl.text = dd['price'].toString(); });
+              },
+              validator: (v) => v == null ? 'Tanlang' : null,
+            );
+          },
+        ),
+        const SizedBox(height: 12),
+        TextFormField(controller: priceCtrl, readOnly: true, style: const TextStyle(fontSize: 15), decoration: _deco('Narx (so\'m)', Icons.payments_rounded)),
+        const SizedBox(height: 20),
+        Row(children: [
+          Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx), style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.grey), padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: const Text('Bekor'))),
+          const SizedBox(width: 12),
+          Expanded(child: ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: primary, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0),
+            onPressed: () async {
+              if (fk.currentState!.validate() && testTypeId != null) {
+                await FirebaseFirestore.instance.collection('laboratory_tests').add({'patientName': nameCtrl.text.trim(), 'testType': testTypeName, 'testTypeId': testTypeId, 'price': double.tryParse(priceCtrl.text) ?? 0, 'status': 'pending', 'isPaid': false, 'result': null, 'createdAt': FieldValue.serverTimestamp(), 'createdBy': FirebaseAuth.instance.currentUser?.uid});
+                if (ctx.mounted) Navigator.pop(ctx);
+              }
+            },
+            child: const Text('Saqlash'),
+          )),
+        ]),
+      ]))),
+    )));
   }
 
-  // --- PDF GENERATION ---
+  // ── Result Dialog ──
+  void _resultDialog(String id, Map<String, dynamic> data) {
+    final ctrl = TextEditingController(text: data['result']);
+    final fk = GlobalKey<FormState>();
+    showDialog(context: context, builder: (ctx) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: Padding(padding: const EdgeInsets.all(24), child: Form(key: fk, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.assignment_turned_in_rounded, color: Color(0xFF2E7D32), size: 26)),
+          const SizedBox(width: 12),
+          const Text('Test natijasi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF4A148C))),
+        ]),
+        const SizedBox(height: 16),
+        Container(padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: const Color(0xFFF8F0FF), borderRadius: BorderRadius.circular(14), border: Border.all(color: const Color(0xFFCE93D8))), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [const Icon(Icons.person_rounded, size: 15, color: primary), const SizedBox(width: 6), Text(data['patientName'] ?? '', style: const TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF4A148C)))]),
+          const SizedBox(height: 4),
+          Row(children: [const Icon(Icons.biotech_rounded, size: 15, color: Colors.grey), const SizedBox(width: 6), Text(data['testType'] ?? '', style: const TextStyle(color: Colors.black54))]),
+        ])),
+        const SizedBox(height: 16),
+        TextFormField(controller: ctrl, maxLines: 4, style: const TextStyle(fontSize: 15), decoration: _deco('Natija', Icons.notes_rounded), validator: (v) => v == null || v.trim().isEmpty ? 'Natija kiriting' : null),
+        const SizedBox(height: 18),
+        Row(children: [
+          Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx), style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.grey), padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: const Text('Bekor'))),
+          const SizedBox(width: 12),
+          Expanded(child: ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF2E7D32), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0),
+            onPressed: () async {
+              if (fk.currentState!.validate()) {
+                await FirebaseFirestore.instance.collection('laboratory_tests').doc(id).update({'result': ctrl.text.trim(), 'status': 'completed', 'completedAt': FieldValue.serverTimestamp()});
+                if (ctx.mounted) Navigator.pop(ctx);
+              }
+            },
+            child: const Text('Saqlash'),
+          )),
+        ]),
+      ]))),
+    ));
+  }
+
+  // ── PDF ──
   Future<void> _generatePDF(List<QueryDocumentSnapshot> tests) async {
     final pdf = pw.Document();
-    
-    // Calculate stats
-    int totalTests = tests.length;
-    int completedTests = tests.where((t) => (t.data() as Map)['status'] == 'completed').length;
-    int pendingTests = totalTests - completedTests;
-    double totalRevenue = tests.fold(0.0, (sum, t) {
-      final data = t.data() as Map<String, dynamic>;
-      return sum + (data['isPaid'] == true ? (data['price'] ?? 0.0) : 0.0);
-    });
-
-    // Font setup omitted for brevity but standard PDF workflow
-    
-    pdf.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
-        build: (pw.Context context) {
-          return [
-             pw.Header(level: 0, child: pw.Text('MEDLINE Laboratory Report', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold))),
-             pw.SizedBox(height: 20),
-             pw.Text('Date: ${DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())}'),
-             pw.SizedBox(height: 20),
-             pw.Table.fromTextArray(
-               context: context,
-               data: <List<String>>[
-                 <String>['Metric', 'Value'],
-                 <String>['Total Tests', '$totalTests'],
-                 <String>['Completed', '$completedTests'],
-                 <String>['Pending', '$pendingTests'],
-                 <String>['Revenue', '$totalRevenue'],
-               ],
-             ),
-             pw.SizedBox(height: 20),
-             pw.Table.fromTextArray(
-               context: context,
-               data: <List<String>>[
-                 <String>['Patient', 'Test Type', 'Price', 'Status'],
-                 ...tests.map((t) {
-                   final d = t.data() as Map<String, dynamic>;
-                   return [d['patientName'] ?? '', d['testType'] ?? '', '${d['price']}', d['status']];
-                 }),
-               ],
-             ),
-          ];
-        },
-      ),
-    );
-
-    await Printing.layoutPdf(onLayout: (PdfPageFormat format) async => pdf.save());
-  }
-
-
-  // --- WIDGETS ---
-  Widget _glassField({required TextEditingController controller, required String label, required IconData icon, bool isNumber = false, bool readOnly = false}) {
-    return TextFormField(
-      controller: controller,
-      keyboardType: isNumber ? TextInputType.number : TextInputType.text,
-      readOnly: readOnly,
-      style: const TextStyle(color: Colors.white),
-      decoration: InputDecoration(
-        labelText: label,
-        labelStyle: const TextStyle(color: Colors.white70),
-        prefixIcon: Icon(icon, color: Colors.white70),
-        filled: true,
-        fillColor: Colors.white.withOpacity(0.05),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFF4DB6AC), width: 1.5)),
-      ),
-      validator: (v) => v == null || v.isEmpty ? 'Maydonni to\'ldiring' : null,
-    );
-  }
-
-  Widget _buildInfoRow(IconData icon, String label, String value) {
-    return Row(
-      children: [
-        Icon(icon, size: 16, color: Colors.white70),
-        const SizedBox(width: 8),
-        Text('$label: ', style: const TextStyle(color: Colors.white70, fontSize: 13)),
-        Text(value, style: const TextStyle(color: Colors.white, fontSize: 13)),
-      ],
-    );
-  }
-
-  Widget _buildStatItem(String label, String value, IconData icon, Color color) {
-    return Column(
-      children: [
-        Icon(icon, color: color, size: 28),
-        const SizedBox(height: 8),
-        Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
-        Text(label, style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.7))),
-      ],
-    );
-  }
-
-  Widget _buildTabButton(String title, String tab) {
-    final isSelected = _selectedTab == tab;
-    return GestureDetector(
-      onTap: () => setState(() => _selectedTab = tab),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF4DB6AC) : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: isSelected ? const Color(0xFF4DB6AC) : Colors.white.withOpacity(0.2)),
-        ),
-        child: Center(
-          child: Text(title, style: TextStyle(color: Colors.white, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
-        ),
-      ),
-    );
+    final total = tests.length;
+    final done = tests.where((t) => (t.data() as Map)['status'] == 'completed').length;
+    pdf.addPage(pw.MultiPage(pageFormat: PdfPageFormat.a4, build: (_) => [
+      pw.Header(level: 0, child: pw.Text('MEDLINE Laboratoriya Hisoboti', style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold))),
+      pw.SizedBox(height: 10),
+      pw.Text('Sana: ${DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())}'),
+      pw.SizedBox(height: 20),
+      pw.Table.fromTextArray(data: [['Ko\'rsatkich', 'Qiymat'], ['Jami testlar', '$total'], ['Bajarilgan', '$done'], ['Kutilmoqda', '${total - done}']]),
+      pw.SizedBox(height: 20),
+      pw.Table.fromTextArray(data: [['Bemor', 'Test', 'Narx', 'Holat'], ...tests.map((t) { final d = t.data() as Map<String, dynamic>; return [d['patientName'] ?? '', d['testType'] ?? '', '${d['price']}', d['status']]; })]),
+    ]));
+    await Printing.layoutPdf(onLayout: (_) => pdf.save());
   }
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<LanguageProvider>(
-      builder: (context, lang, child) {
-        return Scaffold(
-          extendBodyBehindAppBar: true,
-          appBar: AppBar(
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            title: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
-                  child: const Icon(Icons.science, color: Color(0xFF0A7075), size: 24),
-                ),
-                const SizedBox(width: 12),
-                const Text('Laboratory', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20, color: Colors.white)),
-              ],
-            ),
-            actions: [
-              IconButton(icon: const Icon(Icons.category, color: Colors.white), onPressed: () => _showTestTypesDialog(context)),
-              IconButton(icon: const Icon(Icons.logout, color: Colors.white), onPressed: () async {
-                 await FirebaseAuth.instance.signOut();
-                 if (context.mounted) Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const LoginScreen()), (route) => false);
-              }),
-            ],
-          ),
-          body: Stack(
-            children: [
-              // Background
-              Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Color(0xFF0A7075), Color(0xFF083D56), Color(0xFF0A2D4A), Color(0xFF0F1E3C)],
-                  ),
-                ),
-              ),
-              ...List.generate(6, (i) => _floatingParticle(i)),
+    return Consumer<LanguageProvider>(builder: (ctx, lang, _) => Scaffold(
+      backgroundColor: bgPage,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        flexibleSpace: Container(decoration: const BoxDecoration(
+          gradient: LinearGradient(colors: [Color(0xFF7B2FBE), Color(0xFF9B59B6)]),
+        )),
+        elevation: 0, toolbarHeight: 68,
+        leading: const SizedBox.shrink(),
+        title: Row(children: [
+          Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.science_rounded, color: Colors.white, size: 24)),
+          const SizedBox(width: 12),
+          const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('MEDLINE', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 1)),
+            Text('Laboratoriya', style: TextStyle(fontSize: 11, color: Colors.white70)),
+          ]),
+        ]),
+        actions: [
+          IconButton(icon: const Icon(Icons.category_rounded, color: Colors.white), onPressed: _testTypesDialog, tooltip: 'Test turlari'),
+          IconButton(icon: const Icon(Icons.picture_as_pdf_rounded, color: Colors.white), onPressed: () async {
+            final snap = await FirebaseFirestore.instance.collection('laboratory_tests').get();
+            _generatePDF(snap.docs);
+          }, tooltip: 'Hisobot'),
+          IconButton(icon: const Icon(Icons.logout_rounded, color: Colors.white), onPressed: () async {
+            await FirebaseAuth.instance.signOut();
+            if (mounted) Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
+          }),
+          const SizedBox(width: 4),
+        ],
+        bottom: PreferredSize(preferredSize: const Size.fromHeight(3), child: Container(height: 3, decoration: const BoxDecoration(gradient: LinearGradient(colors: [Color(0xFFCE93D8), Color(0xFF80DEEA)])))),
+      ),
+      body: FadeTransition(opacity: _fadeAnim, child: Column(children: [
+        // Stats
+        StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance.collection('laboratory_tests').snapshots(),
+          builder: (ctx, snap) {
+            if (!snap.hasData) return const SizedBox();
+            final docs = snap.data!.docs;
+            final total = docs.length;
+            final done = docs.where((d) => (d.data() as Map)['status'] == 'completed').length;
+            final pend = total - done;
+            return Container(
+              margin: const EdgeInsets.fromLTRB(14, 14, 14, 0),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18), boxShadow: ML.cardShadow),
+              child: Row(children: [
+                _stat('Jami', '$total', Icons.science_rounded, ML.purple, const Color(0xFFF3E5F5)),
+                _stat('Bajarilgan', '$done', Icons.check_circle_rounded, doneClr, doneBg),
+                _stat('Kutilmoqda', '$pend', Icons.pending_rounded, pendClr, pendBg),
+              ]),
+            );
+          },
+        ),
+        // Search & tabs
+        Container(color: Colors.white, padding: const EdgeInsets.fromLTRB(14, 8, 14, 0), child: Column(children: [
+          TextField(controller: _searchCtrl, style: const TextStyle(fontSize: 14), decoration: _deco('Bemor ismi bo\'yicha qidirish', Icons.search_rounded).copyWith(contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14), suffixIcon: _search.isNotEmpty ? IconButton(icon: const Icon(Icons.clear, color: Colors.grey), onPressed: () { _searchCtrl.clear(); }) : null)),
+          const SizedBox(height: 8),
+          Row(children: [
+            _tabBtn('Hammasi', 'all'), const SizedBox(width: 8),
+            _tabBtn('Kutilmoqda', 'pending'), const SizedBox(width: 8),
+            _tabBtn('Bajarilgan', 'completed'),
+          ]),
+          const SizedBox(height: 4),
+        ])),
+        // List
+        Expanded(child: StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance.collection('laboratory_tests').orderBy('createdAt', descending: true).snapshots(),
+          builder: (ctx, snap) {
+            if (snap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: primary));
+            if (!snap.hasData || snap.data!.docs.isEmpty) return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Container(padding: const EdgeInsets.all(24), decoration: BoxDecoration(color: const Color(0xFFF3E5F5), shape: BoxShape.circle), child: const Icon(Icons.science_rounded, size: 48, color: primary)),
+              const SizedBox(height: 16), const Text('Testlar yo\'q', style: TextStyle(color: Colors.black45, fontSize: 16)),
+            ]));
+            var docs = snap.data!.docs;
+            if (_tab != 'all') docs = docs.where((d) => (d.data() as Map)['status'] == _tab).toList();
+            if (_search.isNotEmpty) docs = docs.where((d) => ((d.data() as Map)['patientName'] as String? ?? '').toLowerCase().contains(_search.toLowerCase())).toList();
+            if (docs.isEmpty) return Center(child: Text('Natija topilmadi', style: const TextStyle(color: Colors.black45)));
+            return ListView.builder(
+              padding: const EdgeInsets.all(14),
+              itemCount: docs.length,
+              itemBuilder: (_, i) {
+                final d = docs[i].data() as Map<String, dynamic>;
+                final done = d['status'] == 'completed';
+                final name = (d['patientName'] as String? ?? '');
+                final init = name.isNotEmpty ? name[0].toUpperCase() : 'B';
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18),
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 3))],
+                    border: Border.all(color: done ? ML.done.withOpacity(0.3) : ML.waiting.withOpacity(0.3), width: 1.5)),
+                  child: Material(color: Colors.transparent, child: InkWell(
+                    borderRadius: BorderRadius.circular(18),
+                    onTap: done ? null : () => _resultDialog(docs[i].id, d),
+                    child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Row(children: [
+                        Container(width: 46, height: 46,
+                          decoration: BoxDecoration(gradient: LinearGradient(colors: done ? [doneClr, const Color(0xFF4CAF50)] : [primary, const Color(0xFFAB47BC)]), borderRadius: BorderRadius.circular(12)),
+                          child: Center(child: Text(init, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)))),
+                        const SizedBox(width: 14),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(name.isNotEmpty ? name : 'Bemor', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF4A148C))),
+                          const SizedBox(height: 3),
+                          Row(children: [
+                            Icon(Icons.biotech_rounded, size: 13, color: Colors.grey.shade500), const SizedBox(width: 4),
+                            Text(d['testType'] ?? '', style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                          ]),
+                        ])),
+                        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                          Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: done ? doneBg : pendBg, borderRadius: BorderRadius.circular(20)),
+                            child: Text(done ? 'Bajarildi' : 'Kutilmoqda', style: TextStyle(fontSize: 11, color: done ? doneClr : pendClr, fontWeight: FontWeight.bold))),
+                          const SizedBox(height: 4),
+                          Text('${NumberFormat('#,###', 'uz_UZ').format((d['price'] as num? ?? 0).toDouble())} so\'m', style: const TextStyle(fontSize: 13, color: primary, fontWeight: FontWeight.bold)),
+                        ]),
+                      ]),
+                      if (done && d['result'] != null) ...[
+                        const SizedBox(height: 12),
+                        Container(width: double.infinity, padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(color: doneBg, borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFA5D6A7))),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            const Row(children: [Icon(Icons.assignment_turned_in_rounded, size: 13, color: doneClr), SizedBox(width: 5), Text('Natija', style: TextStyle(color: doneClr, fontWeight: FontWeight.bold, fontSize: 12))]),
+                            const SizedBox(height: 5),
+                            Text(d['result'], style: const TextStyle(color: Color(0xFF1B5E20), fontSize: 13)),
+                          ])),
+                      ],
+                      if (!done) ...[
+                        const SizedBox(height: 12),
+                        SizedBox(width: double.infinity, child: ElevatedButton.icon(
+                          onPressed: () => _resultDialog(docs[i].id, d),
+                          icon: const Icon(Icons.edit_rounded, size: 16),
+                          label: const Text('Natija kiritish', style: TextStyle(fontWeight: FontWeight.bold)),
+                          style: ElevatedButton.styleFrom(backgroundColor: primary, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 11), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0),
+                        )),
+                      ],
+                    ])),
+                  )),
+                );
+              },
+            );
+          },
+        )),
+      ])),
+      floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: primary, foregroundColor: Colors.white,
+        onPressed: _addTestDialog,
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Yangi test'),
+        elevation: 4,
+      ),
+    ));
+  }
 
-              SafeArea(
-                child: Column(
-                  children: [
-                    // Stats and Filter
-                    Container(
-                      margin: const EdgeInsets.all(16),
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(color: Colors.white.withOpacity(0.1)),
-                      ),
-                      child: Column(
-                        children: [
-                          StreamBuilder<QuerySnapshot>(
-                            stream: FirebaseFirestore.instance.collection('laboratory_tests').snapshots(),
-                            builder: (context, snapshot) {
-                              if (!snapshot.hasData) return const SizedBox();
-                              final tests = snapshot.data!.docs;
-                              final total = tests.length;
-                              final completed = tests.where((t) => (t.data() as Map)['status'] == 'completed').length;
-                              final pending = tests.where((t) => (t.data() as Map)['status'] == 'pending').length;
-                              
-                              return Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                                children: [
-                                  _buildStatItem('Jami', '$total', Icons.science, Colors.blueAccent),
-                                  _buildStatItem('Bajarilgan', '$completed', Icons.check_circle, Colors.greenAccent),
-                                  _buildStatItem('Kutilmoqda', '$pending', Icons.pending, Colors.orangeAccent),
-                                ],
-                              );
-                            },
-                          ),
-                          const SizedBox(height: 16),
-                          Row(
-                            children: [
-                              Expanded(child: _buildTabButton('Hammasi', 'all')),
-                              const SizedBox(width: 8),
-                              Expanded(child: _buildTabButton('Kutilmoqda', 'pending')),
-                              const SizedBox(width: 8),
-                              Expanded(child: _buildTabButton('Bajarilgan', 'completed')),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
+  Widget _stat(String label, String val, IconData icon, Color color, Color bg) => Expanded(child: Container(
+    margin: const EdgeInsets.symmetric(horizontal: 4),
+    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+    decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(14), border: Border.all(color: color.withOpacity(0.3))),
+    child: Column(children: [
+      Icon(icon, color: color, size: 22),
+      const SizedBox(height: 4),
+      Text(val, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: color)),
+      Text(label, style: const TextStyle(fontSize: 10, color: Colors.black45), textAlign: TextAlign.center),
+    ]),
+  ));
 
-                    // LIST
-                    Expanded(
-                      child: StreamBuilder<QuerySnapshot>(
-                        stream: FirebaseFirestore.instance.collection('laboratory_tests').orderBy('createdAt', descending: true).snapshots(),
-                        builder: (context, snapshot) {
-                          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Colors.white));
-                          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) return const Center(child: Text('Ma\'lumotlar yo\'q', style: TextStyle(color: Colors.white60)));
-
-                          var tests = snapshot.data!.docs;
-                           if (_selectedTab != 'all') {
-                              tests = tests.where((d) => (d.data() as Map)['status'] == _selectedTab).toList();
-                           }
-
-                          return ListView.builder(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            itemCount: tests.length,
-                            itemBuilder: (context, index) {
-                              final test = tests[index];
-                              final data = test.data() as Map<String, dynamic>;
-                              final isCompleted = data['status'] == 'completed';
-
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 12),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.05),
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(color: Colors.white.withOpacity(0.1)),
-                                ),
-                                child: InkWell(
-                                  onTap: isCompleted ? null : () => _showResultDialog(context, test.id, data),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(16),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            CircleAvatar(
-                                              backgroundColor: isCompleted ? Colors.green.withOpacity(0.2) : Colors.orange.withOpacity(0.2),
-                                              child: Icon(isCompleted ? Icons.check : Icons.hourglass_empty, color: isCompleted ? Colors.greenAccent : Colors.orangeAccent, size: 20),
-                                            ),
-                                            const SizedBox(width: 12),
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(data['patientName'] ?? '', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                                                  Text(data['testType'] ?? '', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 13)),
-                                                ],
-                                              ),
-                                            ),
-                                            Text(
-                                              '${data['price'] ?? 0} so\'m',
-                                              style: TextStyle(color: Colors.white.withOpacity(0.9), fontWeight: FontWeight.bold),
-                                            ),
-                                          ],
-                                        ),
-                                        if (isCompleted && data['result'] != null) ...[
-                                           const SizedBox(height: 12),
-                                           Container(
-                                             width: double.infinity,
-                                             padding: const EdgeInsets.all(12),
-                                             decoration: BoxDecoration(
-                                               color: Colors.green.withOpacity(0.1),
-                                               borderRadius: BorderRadius.circular(12),
-                                               border: Border.all(color: Colors.green.withOpacity(0.3)),
-                                             ),
-                                             child: Text(data['result'], style: const TextStyle(color: Colors.white)),
-                                           ),
-                                        ]
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              
-              Positioned(
-                bottom: 20, 
-                right: 20,
-                child: FloatingActionButton.extended(
-                  onPressed: () => _showAddTestDialog(context),
-                  backgroundColor: const Color(0xFF4DB6AC),
-                  icon: const Icon(Icons.add),
-                  label: const Text('New Test'),
-                ),
-              ),
-              Positioned(
-                bottom: 20,
-                left: 20,
-                child: FloatingActionButton(
-                   mini: true,
-                   onPressed: () async {
-                      // Generate report for all visible
-                      final snapshot = await FirebaseFirestore.instance.collection('laboratory_tests').get();
-                      _generatePDF(snapshot.docs);
-                   },
-                   backgroundColor: Colors.redAccent,
-                   child: const Icon(Icons.picture_as_pdf),
-                ),
-              )
-            ],
-          ),
-        );
-      },
-    );
+  Widget _tabBtn(String label, String key) {
+    final sel = _tab == key;
+    return Expanded(child: GestureDetector(
+      onTap: () => setState(() => _tab = key),
+      child: AnimatedContainer(duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(color: sel ? primary : Colors.grey.shade100, borderRadius: BorderRadius.circular(12)),
+        child: Center(child: Text(label, style: TextStyle(fontSize: 12, color: sel ? Colors.white : Colors.grey, fontWeight: sel ? FontWeight.bold : FontWeight.normal))),
+      ),
+    ));
   }
 }

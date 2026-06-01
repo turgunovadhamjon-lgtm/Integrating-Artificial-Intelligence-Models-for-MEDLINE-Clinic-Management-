@@ -1,621 +1,337 @@
 // lib/screens/receptionist_dashboard.dart
-import 'dart:math';
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../providers/language_provider.dart';
-import '../providers/theme_provider.dart';
-import '../widgets/theme_toggle.dart';
+import '../theme/medline_theme.dart';
 import 'login_screen.dart';
 import 'patients_list_screen.dart';
 import 'diagnostic_web_screen.dart';
 import 'hospitalization_dashboard.dart';
+import 'dmed_screen.dart';
 
 class ReceptionistDashboard extends StatefulWidget {
   const ReceptionistDashboard({super.key});
-
-  @override
-  State<ReceptionistDashboard> createState() => _ReceptionistDashboardState();
+  @override State<ReceptionistDashboard> createState() => _ReceptionistDashboardState();
 }
 
-class _ReceptionistDashboardState extends State<ReceptionistDashboard>
-    with SingleTickerProviderStateMixin {
-  final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
-  final _surnameController = TextEditingController();
-  final _queueController = TextEditingController();
-  final _addressController = TextEditingController();
-  final _issueController = TextEditingController();
-  final _priceController = TextEditingController();
-
+class _ReceptionistDashboardState extends State<ReceptionistDashboard> with SingleTickerProviderStateMixin {
+  final _formKey  = GlobalKey<FormState>();
+  final _nameCtrl = TextEditingController();
+  final _surCtrl  = TextEditingController();
+  final _queueCtrl= TextEditingController();
+  final _addrCtrl = TextEditingController();
+  final _issueCtrl= TextEditingController();
+  final _priceCtrl= TextEditingController();
   String? _selectedDoctor;
-  bool _isPaid = false;
-  List<Map<String, String>> _doctors = [];
+  bool _isPaid    = false;
   bool _isLoading = false;
-  late AnimationController _animationController;
-  late Animation<double> _fadeAnimation;
+  List<Map<String, String>> _doctors = [];
+  late AnimationController _ac;
+  late Animation<double> _fade;
+
+  StreamSubscription<QuerySnapshot>? _queueSub;
 
   @override
   void initState() {
     super.initState();
-    _animationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    );
-    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeOutCubic),
-    );
-    _animationController.forward();
+    _ac = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
+    _fade = CurvedAnimation(parent: _ac, curve: Curves.easeOut);
+    _ac.forward();
     _loadDoctors();
-    _loadNextQueueNumber();
+    _listenQueue(); // Real-time navbat
+  }
+  @override
+  void dispose() {
+    _queueSub?.cancel();
+    _ac.dispose();
+    for (final c in [_nameCtrl, _surCtrl, _queueCtrl, _addrCtrl, _issueCtrl, _priceCtrl]) c.dispose();
+    super.dispose();
   }
 
-  // Floating particles
-  Widget _floatingParticle(int index) {
-    final random = Random(index);
-    final size = random.nextDouble() * 100 + 50;
-    final duration = 20 + random.nextInt(15);
-    return AnimatedPositioned(
-      duration: Duration(seconds: duration),
-      curve: Curves.easeInOutSine,
-      top: -size,
-      left: (random.nextDouble() * 100).clamp(0.0, 95.0) * (MediaQuery.of(context).size.width / 100),
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: RadialGradient(
-            colors: [Colors.white.withOpacity(0.08), Colors.transparent],
-          ),
-          boxShadow: [
-            BoxShadow(color: Colors.white.withOpacity(0.06), blurRadius: 40, spreadRadius: 10),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _loadNextQueueNumber() async {
-    try {
-      final now = DateTime.now();
-      final todayStart = DateTime(now.year, now.month, now.day);
-      final snapshot = await FirebaseFirestore.instance
-          .collection('patients')
-          .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(todayStart))
-          .get();
-
-      int nextQueue = 1;
-      if (snapshot.docs.isNotEmpty) {
-        int maxQueue = 0;
-        for (var doc in snapshot.docs) {
-          final queueNum = int.tryParse(doc['queue'] as String? ?? '0') ?? 0;
-          if (queueNum > maxQueue) maxQueue = queueNum;
-        }
-        nextQueue = maxQueue + 1;
+  // Real-time navbat — Firestore da yangi bemor qo'shilsa avtomatik yangilanadi
+  void _listenQueue() {
+    final now = DateTime.now();
+    final todayStart = Timestamp.fromDate(DateTime(now.year, now.month, now.day));
+    _queueSub = FirebaseFirestore.instance
+        .collection('patients')
+        .where('createdAt', isGreaterThanOrEqualTo: todayStart)
+        .snapshots()
+        .listen((snap) {
+      int max = 0;
+      for (var d in snap.docs) {
+        final q = int.tryParse(d['queue'] as String? ?? '0') ?? 0;
+        if (q > max) max = q;
       }
-      if (mounted) setState(() => _queueController.text = nextQueue.toString());
-    } catch (e) {
-      if (mounted) setState(() => _queueController.text = '1');
-    }
-  }
-
-  void _loadDoctors() async {
-    setState(() => _isLoading = true);
-    try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .where('role', isEqualTo: 'doctor')
-          .get();
-      setState(() {
-        _doctors = snapshot.docs
-            .map((doc) => {'id': doc.id, 'name': (doc['name'] as String?)?.trim() ?? 'Noma\'lum'})
-            .toList();
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() => _isLoading = false);
-    }
-  }
-
-  void _submitPatient() async {
-    final lang = Provider.of<LanguageProvider>(context, listen: false);
-    if (!_formKey.currentState!.validate() || _selectedDoctor == null) {
-      _showSnackBar('Barcha maydonlarni to‘ldiring!', Colors.orange);
-      return;
-    }
-
-    setState(() => _isLoading = true);
-    try {
-      await FirebaseFirestore.instance.collection('patients').add({
-        'name': _nameController.text.trim(),
-        'surname': _surnameController.text.trim(),
-        'fullName': '${_nameController.text.trim()} ${_surnameController.text.trim()}',
-        'queue': _queueController.text.trim(),
-        'address': _addressController.text.trim(),
-        'issue': _issueController.text.trim(),
-        'doctorId': _selectedDoctor,
-        'price': double.tryParse(_priceController.text.replaceAll(',', '')) ?? 0.0,
-        'isPaid': _isPaid,
-        'createdAt': FieldValue.serverTimestamp(),
-        'status': 'waiting',
-      });
-
-      _showSnackBar('Bemor muvaffaqiyatli qo‘shildi!', const Color(0xFF0A7075));
-      _clearForm();
-      _loadNextQueueNumber();
-    } catch (e) {
-      _showSnackBar('Xato: $e', Colors.red);
-    } finally {
-      setState(() => _isLoading = false);
-    }
-  }
-
-  void _showSnackBar(String message, Color color) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(children: [const Icon(Icons.info, color: Colors.white), const SizedBox(width: 12), Text(message, style: const TextStyle(color: Colors.white))]),
-        backgroundColor: color,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        margin: const EdgeInsets.all(16),
-      ),
-    );
-  }
-
-  void _clearForm() {
-    _formKey.currentState?.reset();
-    _nameController.clear();
-    _surnameController.clear();
-    _addressController.clear();
-    _issueController.clear();
-    _priceController.clear();
-    setState(() {
-      _selectedDoctor = null;
-      _isPaid = false;
+      if (mounted) setState(() => _queueCtrl.text = (max + 1).toString());
+    }, onError: (_) {
+      if (mounted) setState(() => _queueCtrl.text = '1');
     });
   }
 
-  Future<void> _logout() async {
-    await FirebaseAuth.instance.signOut();
-    if (!mounted) return;
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-          (route) => false,
-    );
+  Future<void> _loadDoctors() async {
+    try {
+      final snap = await FirebaseFirestore.instance.collection('users').where('role', isEqualTo: 'doctor').get();
+      if (mounted) setState(() { _doctors = snap.docs.map((d) => {'id': d.id, 'name': (d['name'] as String? ?? '').trim()}).toList(); });
+    } catch (_) {}
   }
 
-  // TIL O‘ZGARTIRISH DIALOGI
-  void _showLanguageDialog() {
+  Future<void> _submit() async {
     final lang = Provider.of<LanguageProvider>(context, listen: false);
-    showDialog(
-      context: context,
-      builder: (_) => Dialog(
-        backgroundColor: Colors.transparent,
-        child: Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1A1F36).withOpacity(0.95),
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: Colors.white.withOpacity(0.2), width: 1.5),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 30, offset: const Offset(0, 15)),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0A7075).withOpacity(0.3),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: const Icon(Icons.language, color: Colors.white, size: 32),
-                  ),
-                  const SizedBox(width: 16),
-                  Text(
-                    lang.translate('language') ?? 'Tilni tanlang',
-                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 15),
-              _languageOption('UZB', 'O‘zbekcha', 'UZB'),
-              const Divider(color: Colors.white, height: 1),
-              _languageOption('ENG', 'English', 'ENG'),
-              const Divider(color: Colors.white, height: 1),
-              _languageOption('RUS', 'Русский', 'RUS'),
-              const Divider(color: Colors.white, height: 1),
-              _languageOption('KYR', 'Кыргызча', 'KYR'),
-            ],
-          ),
-        ),
-      ),
-    );
+    if (!_formKey.currentState!.validate() || _selectedDoctor == null) {
+      _snack('Barcha majburiy maydonlarni to\'ldiring!', ML.amber); return;
+    }
+    setState(() => _isLoading = true);
+    try {
+      await FirebaseFirestore.instance.collection('patients').add({
+        'name': _nameCtrl.text.trim(), 'surname': _surCtrl.text.trim(),
+        'fullName': '${_nameCtrl.text.trim()} ${_surCtrl.text.trim()}',
+        'queue': _queueCtrl.text.trim(), 'address': _addrCtrl.text.trim(),
+        'issue': _issueCtrl.text.trim(), 'doctorId': _selectedDoctor,
+        'price': double.tryParse(_priceCtrl.text.replaceAll(',', '')) ?? 0.0,
+        'isPaid': _isPaid, 'createdAt': FieldValue.serverTimestamp(), 'status': 'waiting',
+      });
+      _snack(lang.translate('patient_added') ?? 'Bemor muvaffaqiyatli qo\'shildi!', ML.mint);
+      _clear();
+    } catch (e) { _snack('Xato: $e', ML.coral); }
+    finally { if (mounted) setState(() => _isLoading = false); }
   }
 
-  // UZB, ENG, RUS YOZUVLARI ENDI TOZA OQ, KATTA VA CHIROYLII!
-  Widget _languageOption(String code, String name, String flag) {
-    final lang = Provider.of<LanguageProvider>(context, listen: false);
-    final isSelected = lang.currentLanguage == code;
+  void _clear() {
+    _formKey.currentState?.reset();
+    for (final c in [_nameCtrl, _surCtrl, _addrCtrl, _issueCtrl, _priceCtrl]) c.clear();
+    setState(() { _selectedDoctor = null; _isPaid = false; });
+  }
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: () {
-          lang.changeLanguage(code);
-          Navigator.pop(context);
-          setState(() {});
-        },
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
-          decoration: BoxDecoration(
-            color: isSelected ? const Color(0xFF0A7075).withOpacity(0.35) : Colors.transparent,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Row(
-            children: [
-              // FLAG – TOZA OQ, KATTA VA QALIN!
-              Text(
-                flag,
-                style: const TextStyle(
-                  fontSize: 26,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white,
-                  shadows: [
-                    Shadow(color: Colors.black45, offset: Offset(1, 1), blurRadius: 4),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 18),
-              Expanded(
-                child: Text(
-                  name,
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-              if (isSelected)
-                const Icon(Icons.check_circle_rounded, color: Colors.white, size: 28),
-            ],
-          ),
-        ),
-      ),
-    );
+  void _snack(String msg, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Row(children: [const Icon(Icons.info_outline, color: Colors.white), const SizedBox(width: 10), Expanded(child: Text(msg))]),
+      backgroundColor: color, behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), margin: const EdgeInsets.all(16),
+    ));
   }
 
   @override
   Widget build(BuildContext context) {
-    final lang = Provider.of<LanguageProvider>(context);
-
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        toolbarHeight: 90,
-        title: Row(
-          children: [
-            Hero(
-              tag: 'clinic_logo',
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
-                child: const Icon(Icons.local_hospital, size: 36, color: Color(0xFF0A7075)),
-              ),
-            ),
-            const SizedBox(width: 16),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('MEDLINE', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.white)),
-                Text(
-                  lang.translate('receptionist_panel') ?? 'Qabulxona',
-                  style: const TextStyle(fontSize: 14, color: Colors.white70),
-                ),
-              ],
-            ),
-          ],
-        ),
-        actions: [
-          const ThemeIconButton(), // Theme toggle
-          IconButton(
-            icon: const Icon(Icons.people, color: Colors.white, size: 28),
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PatientsListScreen())),
-            tooltip: lang.translate('patients_list') ?? 'Bemorlar',
-          ),
-          IconButton(
-            icon: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(12)),
-              child: const Icon(Icons.language, color: Colors.white, size: 26),
-            ),
-            onPressed: _showLanguageDialog,
-            tooltip: lang.translate('language') ?? 'Til',
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh, color: Colors.white, size: 28),
-            onPressed: () {
-              _loadDoctors();
-              _loadNextQueueNumber();
-            },
-            tooltip: lang.translate('refresh') ?? 'Yangilash',
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout_rounded, color: Colors.white, size: 28),
-            onPressed: _logout,
-            tooltip: lang.translate('logout') ?? 'Chiqish',
-          ),
-          const SizedBox(width: 12),
-        ],
-      ),
-      body: Stack(
-        children: [
-          Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Color(0xFF0A7075), Color(0xFF083D56), Color(0xFF0A2D4A), Color(0xFF0F1E3C), Color(0xFF0D162F)],
-              ),
-            ),
-          ),
-          ...List.generate(10, (i) => _floatingParticle(i)),
-
-          SafeArea(
-            child: Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
-                child: FadeTransition(
-                  opacity: _fadeAnimation,
-                  child: Column(
-                    children: [
-                      Container(
-                        margin: const EdgeInsets.only(bottom: 16),
-                        height: 90,
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(colors: [Color(0xFFE91E63), Color(0xFFFF4081)]),
-                          borderRadius: BorderRadius.circular(24),
-                          boxShadow: [BoxShadow(color: Colors.pink.withOpacity(0.5), blurRadius: 30)],
-                        ),
-                        child: ElevatedButton.icon(
-                          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DiagnosticWebScreen())),
-                          icon: const Icon(Icons.health_and_safety, size: 36, color: Colors.white),
-                          label: Text(
-                            lang.translate('diagnostic_agent') ?? 'Tibbiy Diagnostika Agenti',
-                            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
-                          ),
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.transparent, shadowColor: Colors.transparent),
-                        ),
-                      ),
-
-                      // HOSPITALIZATION BUTTON
-                      Container(
-                        margin: const EdgeInsets.only(bottom: 32),
-                        height: 90,
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(colors: [Color(0xFF1E88E5), Color(0xFF42A5F5)]),
-                          borderRadius: BorderRadius.circular(24),
-                          boxShadow: [BoxShadow(color: Colors.blue.withOpacity(0.5), blurRadius: 30)],
-                        ),
-                        child: ElevatedButton.icon(
-                          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HospitalizationDashboard())),
-                          icon: const Icon(Icons.hotel, size: 36, color: Colors.white),
-                          label: Text(
-                            lang.translate('hospitalization') ?? 'Yotqizish bo\'limi',
-                            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
-                          ),
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.transparent, shadowColor: Colors.transparent),
-                        ),
-                      ),
-
-                      Container(
-                        padding: const EdgeInsets.all(32),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(32),
-                          border: Border.all(color: Colors.white.withOpacity(0.2), width: 1.5),
-                          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 40)],
-                        ),
-                        child: Form(
-                          key: _formKey,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(16)),
-                                    child: const Icon(Icons.person_add_alt_1_rounded, color: Colors.white, size: 28),
-                                  ),
-                                  const SizedBox(width: 16),
-                                  Text(
-                                    lang.translate('patient_info') ?? 'Bemor maʼlumotlari',
-                                    style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 32),
-
-                              Row(
-                                children: [
-                                  Expanded(child: _glassField(_nameController, lang.translate('name'), Icons.person, true)),
-                                  const SizedBox(width: 16),
-                                  Expanded(child: _glassField(_surnameController, lang.translate('surname') ?? 'Familiya', Icons.person_outline, true)),
-                                ],
-                              ),
-                              const SizedBox(height: 20),
-                              _glassField(_queueController, lang.translate('queue') ?? 'Navbat raqami', Icons.format_list_numbered, false, readOnly: true),
-                              const SizedBox(height: 20),
-                              _glassField(_addressController, lang.translate('address') ?? 'Manzil', Icons.home, false),
-                              const SizedBox(height: 20),
-                              _glassField(_issueController, lang.translate('issue') ?? 'Shikoyat', Icons.medical_information, true, maxLines: 4),
-                              const SizedBox(height: 24),
-                              _doctorDropdown(lang),
-                              const SizedBox(height: 20),
-                              _glassField(_priceController, lang.translate('price') ?? 'To‘lov summasi (so‘m)', Icons.payments, true, keyboardType: TextInputType.number),
-                              const SizedBox(height: 24),
-
-                              Container(
-                                padding: const EdgeInsets.all(20),
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    colors: _isPaid
-                                        ? [Colors.teal.withOpacity(0.3), Colors.cyan.withOpacity(0.2)]
-                                        : [Colors.grey.withOpacity(0.2), Colors.grey.withOpacity(0.1)],
-                                  ),
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(color: _isPaid ? Colors.teal : Colors.white24, width: 2),
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Icon(Icons.payment, size: 32, color: _isPaid ? Colors.tealAccent : Colors.white70),
-                                        const SizedBox(width: 16),
-                                        Text(
-                                          _isPaid ? (lang.translate('paid') ?? 'To‘langan') : (lang.translate('unpaid') ?? 'To‘lanmagan'),
-                                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
-                                        ),
-                                      ],
-                                    ),
-                                    Switch(
-                                      value: _isPaid,
-                                      onChanged: (v) => setState(() => _isPaid = v),
-                                      activeColor: Colors.tealAccent,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 32),
-
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: OutlinedButton.icon(
-                                      onPressed: _clearForm,
-                                      icon: const Icon(Icons.refresh, color: Colors.white),
-                                      label: Text(
-                                        lang.translate('clear') ?? 'Tozalash',
-                                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                                      ),
-                                      style: OutlinedButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(vertical: 20),
-                                        side: const BorderSide(color: Colors.white, width: 2),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 16),
-                                  Expanded(
-                                    flex: 2,
-                                    child: Container(
-                                      height: 64,
-                                      decoration: BoxDecoration(
-                                        gradient: const LinearGradient(colors: [Color(0xFF0A7075), Color(0xFF14B8A6)]),
-                                        borderRadius: BorderRadius.circular(20),
-                                        boxShadow: [BoxShadow(color: const Color(0xFF0A7075).withOpacity(0.5), blurRadius: 20)],
-                                      ),
-                                      child: ElevatedButton.icon(
-                                        onPressed: _isLoading ? null : _submitPatient,
-                                        icon: _isLoading
-                                            ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white))
-                                            : const Icon(Icons.save_alt, color: Colors.white),
-                                        label: Text(
-                                          _isLoading ? (lang.translate('saving') ?? 'Saqlanmoqda...') : (lang.translate('save') ?? 'Saqlash'),
-                                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
-                                        ),
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: Colors.transparent,
-                                          shadowColor: Colors.transparent,
-                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
+    return Consumer<LanguageProvider>(
+      builder: (_, lang, __) => Scaffold(
+        backgroundColor: ML.bgPage,
+        body: Column(children: [
+          _header(lang),
+          Expanded(child: FadeTransition(opacity: _fade, child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(children: [
+              const SizedBox(height: 4),
+              _quickActions(lang),
+              const SizedBox(height: 16),
+              _formCard(lang),
+              const SizedBox(height: 24),
+            ]),
+          ))),
+        ]),
       ),
     );
   }
 
-  Widget _glassField(TextEditingController controller, String label, IconData icon, bool required,
-      {int maxLines = 1, bool readOnly = false, TextInputType? keyboardType}) {
-    return TextFormField(
-      controller: controller,
-      maxLines: maxLines,
-      readOnly: readOnly,
-      keyboardType: keyboardType,
-      style: const TextStyle(color: Colors.white, fontSize: 16),
-      decoration: InputDecoration(
-        labelText: label,
-        labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
-        prefixIcon: Icon(icon, color: const Color(0xFF4DB6AC)),
-        filled: true,
-        fillColor: Colors.white.withOpacity(0.05),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: Color(0xFF4DB6AC), width: 1.5)),
-        errorStyle: const TextStyle(color: Colors.redAccent),
+  Widget _header(LanguageProvider lang) {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: ML.headerGrad,
+        borderRadius: BorderRadius.only(bottomLeft: Radius.circular(28), bottomRight: Radius.circular(28)),
       ),
-      validator: required ? (v) => v!.trim().isEmpty ? 'Majburiy maydon' : null : null,
+      child: SafeArea(bottom: false, child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 12, 20),
+        child: Row(children: [
+          Container(padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(16)),
+              child: const Icon(Icons.assignment_ind_rounded, color: Colors.white, size: 26)),
+          const SizedBox(width: 14),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('MEDLINE', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 1)),
+            Text(lang.translate('receptionist') ?? 'Resepshn', style: const TextStyle(fontSize: 12, color: Colors.white70)),
+          ])),
+          _hBtn(Icons.people_alt_rounded, () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PatientsListScreen()))),
+          _hBtn(Icons.language, () => _langDialog(lang)),
+          _hBtn(Icons.logout_rounded, () async {
+            await FirebaseAuth.instance.signOut();
+            if (mounted) Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
+          }),
+        ]),
+      )),
     );
   }
 
-  Widget _doctorDropdown(LanguageProvider lang) {
-    return DropdownButtonFormField<String>(
+  Widget _hBtn(IconData icon, VoidCallback fn) => Padding(
+    padding: const EdgeInsets.only(left: 6),
+    child: Material(color: Colors.white.withOpacity(0.15), borderRadius: BorderRadius.circular(12),
+        child: InkWell(borderRadius: BorderRadius.circular(12), onTap: fn,
+            child: Padding(padding: const EdgeInsets.all(10), child: Icon(icon, color: Colors.white, size: 21)))),
+  );
+
+  Widget _quickActions(LanguageProvider lang) {
+    return Column(children: [
+      Row(children: [
+        _actionTile('DMED.UZ', Icons.medical_services_outlined, ML.mint,
+                () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DmedScreen(title: 'Shifokor qidirish')))),
+        const SizedBox(width: 12),
+        _actionTile(lang.translate('diagnostic_agent') ?? 'Diagnostika', Icons.health_and_safety_rounded, ML.coral,
+                () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DiagnosticWebScreen()))),
+      ]),
+      const SizedBox(height: 12),
+      _actionTileFull(lang.translate('hospitalization') ?? 'Yotqizish', Icons.hotel_rounded, ML.purple,
+              () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HospitalizationDashboard()))),
+    ]);
+  }
+
+  Widget _actionTile(String label, IconData icon, Color color, VoidCallback fn) => Expanded(
+    child: Container(
+      decoration: BoxDecoration(color: ML.bgCard, borderRadius: BorderRadius.circular(18), boxShadow: ML.cardShadow,
+          border: Border.all(color: color.withOpacity(0.2))),
+      child: Material(color: Colors.transparent, borderRadius: BorderRadius.circular(18),
+          child: InkWell(borderRadius: BorderRadius.circular(18), onTap: fn,
+              child: Padding(padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 14), child: Row(children: [
+                Container(padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(gradient: LinearGradient(colors: [color, color.withOpacity(0.7)]), borderRadius: BorderRadius.circular(12),
+                        boxShadow: [BoxShadow(color: color.withOpacity(0.3), blurRadius: 10, offset: const Offset(0,3))]),
+                    child: Icon(icon, color: Colors.white, size: 22)),
+                const SizedBox(width: 10),
+                Flexible(child: Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color))),
+              ])))),
+    ),
+  );
+
+  Widget _actionTileFull(String label, IconData icon, Color color, VoidCallback fn) => Container(
+    width: double.infinity,
+    decoration: BoxDecoration(
+      gradient: LinearGradient(colors: [color, color.withOpacity(0.8)]),
+      borderRadius: BorderRadius.circular(18),
+      boxShadow: [BoxShadow(color: color.withOpacity(0.35), blurRadius: 14, offset: const Offset(0,5))],
+    ),
+    child: Material(color: Colors.transparent, borderRadius: BorderRadius.circular(18),
+        child: InkWell(borderRadius: BorderRadius.circular(18), onTap: fn,
+            child: Padding(padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20), child: Row(children: [
+              Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(10)),
+                  child: Icon(icon, color: Colors.white, size: 24)),
+              const SizedBox(width: 14),
+              Text(label, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
+              const Spacer(),
+              const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white70, size: 16),
+            ])))),
+  );
+
+  Widget _formCard(LanguageProvider lang) {
+    return Container(
+      decoration: BoxDecoration(color: ML.bgCard, borderRadius: BorderRadius.circular(24), boxShadow: ML.cardShadow),
+      child: Padding(padding: const EdgeInsets.all(22), child: Form(key: _formKey, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        ML.sectionHeader(lang.translate('patient_info') ?? 'Bemor ma\'lumotlari', icon: Icons.person_add_rounded),
+        Row(children: [
+          Expanded(child: _fld(_nameCtrl, lang.translate('name'), Icons.person_outline_rounded, req: true)),
+          const SizedBox(width: 14),
+          Expanded(child: _fld(_surCtrl, lang.translate('surname') ?? 'Familiya', Icons.person_rounded, req: true)),
+        ]),
+        const SizedBox(height: 14),
+        _fld(_queueCtrl, lang.translate('queue') ?? 'Navbat №', Icons.format_list_numbered_rounded, readOnly: true),
+        const SizedBox(height: 14),
+        _fld(_addrCtrl, lang.translate('address'), Icons.location_on_rounded),
+        const SizedBox(height: 14),
+        _fld(_issueCtrl, lang.translate('issue'), Icons.healing_rounded, maxLines: 3, req: true),
+        const SizedBox(height: 14),
+        _doctorDrop(lang),
+        const SizedBox(height: 14),
+        _fld(_priceCtrl, lang.translate('price') ?? 'To\'lov (so\'m)', Icons.payments_rounded, keyType: TextInputType.number, req: true),
+        const SizedBox(height: 14),
+        _paidToggle(lang),
+        const SizedBox(height: 22),
+        Row(children: [
+          OutlinedButton.icon(
+            onPressed: _clear,
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            label: Text(lang.translate('clear') ?? 'Tozalash'),
+            style: OutlinedButton.styleFrom(foregroundColor: Colors.grey.shade600,
+                side: BorderSide(color: Colors.grey.shade300), padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 18),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+          ),
+          const SizedBox(width: 14),
+          Expanded(child: ElevatedButton.icon(
+            onPressed: _isLoading ? null : _submit,
+            icon: _isLoading
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                : const Icon(Icons.save_rounded, size: 20),
+            label: Text(_isLoading ? 'Saqlanmoqda...' : (lang.translate('save') ?? 'Saqlash'),
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            style: ElevatedButton.styleFrom(backgroundColor: ML.primary, foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), elevation: 0),
+          )),
+        ]),
+      ]))),
+    );
+  }
+
+  Widget _fld(TextEditingController c, String? lbl, IconData icon,
+      {bool req = false, bool readOnly = false, int maxLines = 1, TextInputType? keyType}) =>
+      TextFormField(
+        controller: c, readOnly: readOnly, maxLines: maxLines, keyboardType: keyType,
+        style: const TextStyle(fontSize: 15, color: Color(0xFF023E8A)),
+        decoration: ML.inputDec(lbl ?? '', icon),
+        validator: req ? (v) => v == null || v.trim().isEmpty ? 'Majburiy maydon' : null : null,
+      );
+
+  Widget _doctorDrop(LanguageProvider lang) => Theme(
+    data: Theme.of(context).copyWith(
+      canvasColor: Colors.white,
+      textTheme: Theme.of(context).textTheme.apply(bodyColor: const Color(0xFF023E8A)),
+    ),
+    child: DropdownButtonFormField<String>(
       value: _selectedDoctor,
-      dropdownColor: const Color(0xFF1F2940), // Darker consistent background
-      style: const TextStyle(color: Colors.white, fontSize: 16),
-      decoration: InputDecoration(
-        labelText: lang.translate('select_doctor') ?? 'Shifokorni tanlang',
-        labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
-        prefixIcon: const Icon(Icons.person_search, color: Color(0xFF4DB6AC)),
-        filled: true,
-        fillColor: Colors.white.withOpacity(0.05),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: Color(0xFF4DB6AC), width: 1.5)),
-      ),
-      icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white70),
-      items: _doctors.map((d) => DropdownMenuItem(value: d['id'], child: Text(d['name']!, style: const TextStyle(color: Colors.white)))).toList(),
+      style: const TextStyle(fontSize: 15, color: Color(0xFF023E8A)),
+      dropdownColor: Colors.white,
+      menuMaxHeight: 300,
+      decoration: ML.inputDec(lang.translate('select_doctor') ?? 'Shifokor tanlang', Icons.person_search_rounded),
+      items: _doctors.map((d) => DropdownMenuItem(
+        value: d['id'],
+        child: Text(d['name']!, style: const TextStyle(color: Color(0xFF023E8A), fontSize: 15, fontWeight: FontWeight.w500)),
+      )).toList(),
       onChanged: (v) => setState(() => _selectedDoctor = v),
-      validator: (v) => v == null ? (lang.translate('select_doctor') ?? 'Shifokor tanlang') : null,
-    );
-  }
+      validator: (v) => v == null ? 'Shifokor tanlang' : null,
+    ),
+  );
 
-  @override
-  void dispose() {
-    _animationController.dispose();
-    _nameController.dispose();
-    _surnameController.dispose();
-    _queueController.dispose();
-    _addressController.dispose();
-    _issueController.dispose();
-    _priceController.dispose();
-    super.dispose();
+  Widget _paidToggle(LanguageProvider lang) => AnimatedContainer(
+    duration: const Duration(milliseconds: 250),
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+    decoration: BoxDecoration(
+      color: _isPaid ? ML.paidBg : ML.bgField,
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: _isPaid ? ML.paid.withOpacity(0.4) : const Color(0xFFD0E8FF), width: 1.5),
+    ),
+    child: Row(children: [
+      Icon(_isPaid ? Icons.verified_rounded : Icons.radio_button_unchecked_rounded,
+          color: _isPaid ? ML.paid : Colors.grey, size: 24),
+      const SizedBox(width: 12),
+      Text(_isPaid ? (lang.translate('paid') ?? 'To\'langan') : (lang.translate('unpaid') ?? 'To\'lanmagan'),
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _isPaid ? ML.paid : Colors.grey.shade500)),
+      const Spacer(),
+      Switch.adaptive(value: _isPaid, onChanged: (v) => setState(() => _isPaid = v),
+          activeColor: ML.paid),
+    ]),
+  );
+
+  void _langDialog(LanguageProvider lang) {
+    showDialog(context: context, builder: (_) => AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      title: const Row(children: [Icon(Icons.language, color: ML.primary), SizedBox(width: 8), Text('Til', style: TextStyle(color: ML.primary, fontWeight: FontWeight.w800))]),
+      content: Column(mainAxisSize: MainAxisSize.min, children: ['UZB', 'ENG', 'RUS', 'KYR'].map((c) {
+        final names = {'UZB': 'O\'zbekcha', 'ENG': 'English', 'RUS': 'Русский', 'KYR': 'Кыргызча'};
+        final sel = lang.currentLanguage == c;
+        return ListTile(
+          title: Text(names[c]!, style: TextStyle(fontWeight: sel ? FontWeight.bold : FontWeight.normal, color: sel ? ML.primary : Colors.black87)),
+          trailing: sel ? const Icon(Icons.check_circle_rounded, color: ML.primary) : null,
+          onTap: () { lang.changeLanguage(c); Navigator.pop(context); },
+        );
+      }).toList()),
+    ));
   }
 }

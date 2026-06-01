@@ -1309,6 +1309,18 @@ class LanguageProvider with ChangeNotifier {
       'RUS': 'Скоро...',
       'KYR': 'Жакында...',
     },
+    'dmed_search_doctor': {
+      'UZB': 'DMED — Shifokor qidirish',
+      'ENG': 'DMED — Find a Doctor',
+      'RUS': 'DMED — Найти врача',
+      'KYR': 'DMED — Дарыгер издөө',
+    },
+    'dmed_title': {
+      'UZB': 'dmed.uz',
+      'ENG': 'dmed.uz',
+      'RUS': 'dmed.uz',
+      'KYR': 'dmed.uz',
+    },
     'copyright_text': {
       'UZB': '© 2026 MEDLINE. Barcha huquqlar himoyalangan.',
       'ENG': '© 2026 MEDLINE. All rights reserved.',
